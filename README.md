@@ -261,32 +261,17 @@ Cada carpeta contiene 200 imágenes limpias obtenidas desde la web.
 # Ejecucion paso a paso 
 
 ## 1. Ingresar a powershell 
-
-
+ <img width="955" height="502" alt="1" src="https://github.com/user-attachments/assets/8dcdff8c-97e0-44c8-8e2a-77dd1d24050e" />
 ## 2. Se crea un entorno virtual 
-
-
-
-
-
-# Resultados del proceso
-
-Al finalizar, el script imprime:
-
-<img width="542" height="247" alt="image" src="https://github.com/user-attachments/assets/c0a2cfb6-65f2-4167-9368-47fd3f722024" />
-
- # Cómo ejecutar el scraping
-1. Instala dependencias
-```python
-pip install selenium webdriver-manager requests
-``` 
-2. Ejecuta el script
-```python
-python mercado_libre.py
-``` 
-3. Espera que los hilos terminen
-
-Las imágenes aparecerán en scraping/images/.
+ <img width="959" height="502" alt="2" src="https://github.com/user-attachments/assets/c820dafe-d584-45d0-9752-a07e490be93a" />
+## 3. Se instalan librerias necesarias 
+ <img width="1895" height="804" alt="image" src="https://github.com/user-attachments/assets/6c150a27-0c93-4106-b4a4-3a1682168b20" />
+## 4. Se ejecuta el archivo scraper
+ <img width="817" height="545" alt="image" src="https://github.com/user-attachments/assets/489c66b9-811d-4cc4-bd5b-72e75f839f11" />
+## 5. Se crea una carpeta llamada imagenes con todas las carpetas de imagemes
+ <img width="1919" height="1010" alt="image" src="https://github.com/user-attachments/assets/97807015-3243-4adb-b489-c01b50cf05f2" />
+## 6. Cada una cuenta con 200 imagenes como se evidencia en esta:
+ <img width="1919" height="1005" alt="image" src="https://github.com/user-attachments/assets/61e71216-071f-4895-9b62-8579229b2a96" />
 
 # Conclusión del Punto 1
 
@@ -310,29 +295,14 @@ Mutex
 
 Este punto es la base del proyecto completo, permitiendo construir la base de imágenes que alimentará el modelo de clasificación (punto 2) y el sistema de detección en tiempo real (puntos 3 y 4).
 
-
-
-
-
-
-
-
-
-
-
 # PUNTO 2 — Desarrollo Completo del ETL (Extracción, Transformación y Carga)
 
 El objetivo del segundo punto es construir un pipeline ETL profesional que permita:
-
-Organizar y limpiar las imágenes obtenidas en el scraping.
-
-Detectar archivos corruptos o ilegibles.
-
-Preprocesar y estandarizar todo el dataset.
-
-Transformar cada imagen a un formato óptimo para clasificación.
-
-Cargar la información procesada en una estructura final lista para entrenar un modelo.
+- Organizar y limpiar las imágenes obtenidas en el scraping. 
+- Detectar archivos corruptos o ilegibles.
+- Preprocesar y estandarizar todo el dataset.
+- Transformar cada imagen a un formato óptimo para clasificación.
+- Cargar la información procesada en una estructura final lista para entrenar un modelo.
 
 Este apartado documenta toda la arquitectura creada, sus módulos y el flujo de datos paso a paso.
 
