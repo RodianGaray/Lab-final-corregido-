@@ -4,283 +4,244 @@ RODIAN GARAY Y MARIANA LOMBANA
 
 # Descripción General
 
-El primer punto del proyecto consiste en desarrollar un sistema automatizado de Web Scraping capaz de obtener mínimo 200 imágenes de diferentes herramientas utilizadas en los laboratorios de ingeniería electrónica, tales como:
+El objetivo principal del primer módulo del proyecto es desarrollar un sistema automatizado capaz de obtener al menos 200 imágenes de distintas herramientas usadas en los laboratorios de ingeniería electrónica, tales como:
+- Raspberry Pi
+- Generador de señales
+- Osciloscopio
+- Fuente dual
+- Destornillador
+- Pinzas
+- Condensador
+- Transistor
+- Bombilla
 
--Raspberry Pi
-
--Generador de señales
-
--Osciloscopio
-
--Fuente dual
-
--Destornillador
-
--Pinzas
-
--Condensador
-
--Transistor
-
--Bombilla
-
-El objetivo final es construir la base de datos visual que alimentará los siguientes puntos del proyecto (ETL, clasificación, despliegue).
-
-Para garantizar alto rendimiento, el sistema implementa:
-
-Hilos (threads) para paralelismo real.
-
-Semáforo para evitar crear demasiadas instancias de navegador.
-
-Mutex (Lock) para proteger las operaciones de escritura en disco.
-
-Selenium + WebDriver Manager para abrir búsquedas reales en Mercado Libre y capturar imágenes de cada producto.
+Este conjunto de imágenes servirá como base de datos visual para las siguientes fases del proyecto (ETL, clasificación y despliegue).
+Para asegurar un alto rendimiento, el sistema usa:
+- Hilos (threads) para ejecutar múltiples búsquedas en paralelo
+- Semáforo para controlar cuántos navegadores se abren al mismo tiempo
+- Mutex (Lock) para evitar errores al escribir archivos en disco
+- Selenium + WebDriver Manager para realizar búsquedas reales en Mercado Libre
 
 # Arquitectura del Sistema de Scraping
 
+El sistema está construido bajo un modelo de concurrencia que coordina:
+- Un hilo principal que organiza las tareas
+- Varios hilos trabajadores que realizan el scraping
+- Un mecanismo bloqueante que protege las descargas
+- Cada hilo procesa un producto, abre un navegador (si el semáforo lo permite), obtiene enlaces de imágenes y los envía al descargador. Este último guarda los archivos asegurando que no ocurran colisiones.
+
 ```mermaid
 flowchart TD
-    CENTRAL((Sistema de Scraping))
+    CORE((Motor de Scraping))
 
-    MAIN[MAIN THREAD]
-    WORKER[WORKER THREAD x10]
-    DOWN[DOWNLOADER Mutex]
+    CTRL[Hilo Controlador]
+    EXEC[Hilos Ejecutores x10]
+    SAFE[Modulo de Descarga Segura]
 
-    SUB1[Crea lista de productos]
-    SUB2[Lanza hilos en paralelo]
+    A1[Genera listado de categorías]
+    A2[Coordina y distribuye tareas]
 
-    SUB3[Pide turno al semaforo]
-    SUB4[Abre Selenium headless]
-    SUB5[Extrae URLs de imagenes]
-    SUB6[Envia URLs al downloader]
+    B1[Solicita acceso por semáforo]
+    B2[Inicia navegador Selenium]
+    B3[Recolecta enlaces de imágenes]
+    B4[Entrega enlaces al módulo de descarga]
 
-    SUB7[Descarga imagenes]
-    SUB8[Protege escritura]
-    SUB9[Guarda archivos por producto]
+    C1[Realiza descarga HTTP]
+    C2[Usa Lock para evitar conflictos]
+    C3[Organiza y almacena archivos]
 
-    CENTRAL --> MAIN
-    CENTRAL --> WORKER
-    CENTRAL --> DOWN
+    CORE --> CTRL
+    CORE --> EXEC
+    CORE --> SAFE
 
-    MAIN --> SUB1
-    MAIN --> SUB2
+    CTRL --> A1
+    CTRL --> A2
 
-    WORKER --> SUB3
-    WORKER --> SUB4
-    WORKER --> SUB5
-    WORKER --> SUB6
+    EXEC --> B1
+    EXEC --> B2
+    EXEC --> B3
+    EXEC --> B4
 
-    DOWN --> SUB7
-    DOWN --> SUB8
-    DOWN --> SUB9
+    SAFE --> C1
+    SAFE --> C2
+    SAFE --> C3
 
-    MAIN --> WORKER --> DOWN
-
-
+    CTRL --> EXEC --> SAFE
 
 ```
-Descarga segura mediante la librería requests.
-
-Este diseño permite recolectar miles de imágenes de forma rápida, controlada y segura.
 
 
 ##  Tecnologías Utilizadas
 
-| Tecnología        | Uso                                                     |
-|------------------|----------------------------------------------------------|
-| **Python 3**     | Lógica principal del sistema                             |
-| **Selenium**     | Navegación web real y extracción de imágenes             |
-| **WebDriver Manager** | Gestión automática de ChromeDriver                  |
-| **Requests**     | Descarga directa de imágenes                             |
-| **Threads (Hilos)** | Paralelismo para aumentar velocidad                   |
-| **Semaphore**    | Controla el número de navegadores simultáneos            |
-| **Lock / Mutex** | Evita conflictos en la escritura a disco                 |
+
+| Tecnología            | Función                                      |
+| --------------------- | -------------------------------------------- |
+| **Python 3**          | Base lógica del programa                     |
+| **Selenium**          | Captura de imágenes mediante navegación real |
+| **WebDriver Manager** | Administra el driver de Chrome               |
+| **Requests**          | Descarga de archivos                         |
+| **Threads**           | Procesamiento paralelo                       |
+| **Semaphore**         | Control de navegadores abiertos              |
+| **Lock/Mutex**        | Protección en escritura a disco              |
 
 
-# Modelo de Concurrencia: Hilos + Semáforo + Mutex
-
-Este scraping fue diseñado con ingeniería de concurrencia, no simplemente con Python secuencial.
-
-Hilos (threads)
-
-Cada producto se procesa en un hilo independiente.
-Esto permite descargar imágenes de varios productos simultáneamente.
-
- Semáforo (threading.Semaphore)
-
-Abrir muchos navegadores Chrome simultáneamente consume mucha RAM.
-Por eso, se limita a 3 navegadores máximo en paralelo:
-
-``` python
-
-browser_semaphore = threading.Semaphore(3)
-
+# Modelo de Concurrencia
+## Hilos
+Cada producto se procesa en un hilo independiente, lo que permite descargar imágenes simultáneamente.
+## Semáforo
+Para evitar abrir demasiados navegadores a la vez, solo se permiten 3 Chrome simultáneos para no afectar la ram:
 ```
-Solo 3 hilos pueden abrir Selenium a la vez.
-Los demás esperan su turno.
+browser_semaphore = threading.Semaphore(3)
+```
+## Mutex
 
- Mutex (threading.Lock)
-
-Cuando varios hilos descargan imágenes al mismo tiempo existe riesgo de:
-
- -Archivos corruptos
-
--Colisiones escribiendo el mismo nombre
-
--Directorios bloqueados
-
-Para evitarlo:
-
-``` python
-
+Cuando varios archivos se descragar simultaneamente se puede generar archovos corrupos, colisiones o directorios bloqueados para eso, solo un hilo puede escribir en disco para evitar daños o conflictos:
+```
 with file_lock:
     with open(filename, "wb") as f:
         f.write(img.content)
-
 ```
-Solo un hilo escribe a disco a la vez → 100% seguro.
+## Estructura Final 
+
+El scraping genera una carpeta:
+```
+scraping/images/
+    raspberry/
+    osciloscopio/
+    generador_de_senales/
+    transistor/
+    bombilla/
+    ...
+```
 
 # Código utilizado para el scraping
 
-``` python
-
-
+```
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 import threading
-import time
 import os
+import time
 import requests
 
 # ============================
-# LISTA DE PRODUCTOS
+# CONFIGURACIÓN GENERAL
 # ============================
+BASE_DIR = "scraping/images/"
+os.makedirs(BASE_DIR, exist_ok=True)
+
 productos = [
     "multimetro", "raspberry", "generador de señales", "osciloscopio",
     "fuente dual", "destornillador", "pinzas", "condensador",
     "transistor", "bombilla"
 ]
 
-# ============================
-# CARPETA BASE
-# ============================
-BASE_DIR = "scraping/images/"
-os.makedirs(BASE_DIR, exist_ok=True)
-
-# ============================
-# MUTEX (SECCIÓN CRÍTICA DE ESCRITURA)
-# ============================
 file_lock = threading.Lock()
+browser_semaphore = threading.Semaphore(3)  # 3 navegadores máximo
 
 # ============================
-# SEMÁFORO (LIMITAR BROWSERS)
-# ============================
-max_browsers = 3  # 👈 Solo 3 navegadores simultáneos
-browser_semaphore = threading.Semaphore(max_browsers)
-
-# ============================
-# INICIAR DRIVER
+# DRIVER
 # ============================
 def iniciar_driver():
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1920,1080")
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    opt = webdriver.ChromeOptions()
+    opt.add_argument("--headless")
+    opt.add_argument("--window-size=1920,1080")
+    opt.add_argument("--disable-dev-shm-usage")
+    opt.add_argument("--no-sandbox")
+    return webdriver.Chrome(
+        service=Service(ChromeDriverManager().install()),
+        options=opt
+    )
 
 # ============================
-# DESCARGA DE IMAGEN (CRITICAL SECTION)
+# DESCARGA SEGURA
 # ============================
-def descargar_imagen(url, path):
+def descargar_imagen(url, destino):
     try:
-        img = requests.get(url, timeout=5).content
-        
-        # ----- SECCIÓN CRÍTICA -----
-        with file_lock:  # protege escritura
-            with open(path, "wb") as f:
-                f.write(img)
+        contenido = requests.get(url, timeout=5).content
+
+        with file_lock:
+            with open(destino, "wb") as archivo:
+                archivo.write(contenido)
 
     except:
         pass
 
 # ============================
-# FUNCIÓN HILO: SCRAPING
+# FUNCIÓN PRINCIPAL DEL HILO
 # ============================
 def scrapear(producto):
-    # ----- SEMÁFORO -----
-    with browser_semaphore:  # Espera si hay más de 3 navegadores abiertos
+    with browser_semaphore:
 
         driver = iniciar_driver()
-        url = f"https://listado.mercadolibre.com.co/{producto}"
-        driver.get(url)
+        driver.get(f"https://listado.mercadolibre.com.co/{producto}")
         time.sleep(3)
 
-        # SCROLL
-        last_height = driver.execute_script("return document.body.scrollHeight")
+        altura = driver.execute_script("return document.body.scrollHeight")
         for _ in range(6):
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(1.8)
-            new_height = driver.execute_script("return document.body.scrollHeight")
-            if new_height == last_height:
+            nueva_altura = driver.execute_script("return document.body.scrollHeight")
+            if nueva_altura == altura:
                 break
-            last_height = new_height
+            altura = nueva_altura
 
-        # Carpeta
-        carpeta = os.path.join(BASE_DIR, producto.replace(" ", "_"))
-        os.makedirs(carpeta, exist_ok=True)
+        carpeta_producto = os.path.join(BASE_DIR, producto.replace(" ", "_"))
+        os.makedirs(carpeta_producto, exist_ok=True)
 
-        # Imágenes
-        imgs = driver.find_elements(By.TAG_NAME, "img")
+        imagenes = driver.find_elements(By.TAG_NAME, "img")
         contador = 0
 
-        for img in imgs:
-            src = img.get_attribute("src") or img.get_attribute("data-src") or img.get_attribute("srcset")
+        for imagen in imagenes:
+            src = (
+                imagen.get_attribute("src")
+                or imagen.get_attribute("data-src")
+                or imagen.get_attribute("srcset")
+            )
 
             if src and "http" in src:
                 if "srcset" in src:
                     src = src.split(" ")[0]
 
-                path = os.path.join(carpeta, f"{producto}_{contador}.jpg")
-                descargar_imagen(src, path)
+                destino = os.path.join(carpeta_producto, f"{producto}_{contador}.jpg")
+                descargar_imagen(src, destino)
                 contador += 1
 
             if contador >= 200:
                 break
 
-        driver.quit()  # liberar navegador
-
+        driver.quit()
         print(f"✔ {producto} → {contador} imágenes descargadas.")
 
 # ============================
-# CREAR Y EJECUTAR HILOS
+# HILOS
 # ============================
-threads = []
-for producto in productos:
-    hilo = threading.Thread(target=scrapear, args=(producto,))
-    hilo.start()
-    threads.append(hilo)
+hilos = []
+for prod in productos:
+    t = threading.Thread(target=scrapear, args=(prod,))
+    t.start()
+    hilos.append(t)
 
-for hilo in threads:
-    hilo.join()
+for t in hilos:
+    t.join()
 
 print("\nFINALIZADO\n")
 
 ``` 
-Este script:
+Este script paso a paso :
 
-Abre Mercado Libre
- Busca cada producto
- Descarga hasta 200 imágenes por categoría
- Crea carpetas automáticamente
- Usa Selenium + Hilos de forma profesional
+ 1. Abre Mercado Libre
+ 2. Busca cada producto
+ 3. Descarga hasta 200 imágenes por categoría
+ 4. Crea carpetas automáticamente
+ 5. Usa Selenium + Hilos de forma profesional
 
 # Estructura de Salida del Scraping
 
-Una vez ejecutado, automáticamente se genera:
-
+Una vez ejecutado, automáticamente se genera la carpeta y enumera cada imagen en orden de esta forma:
+```
 scraping/
 │
 └── images/
@@ -293,9 +254,20 @@ scraping/
     ├── transistor/
     ├── bombilla/
     └── ...
-
+```
 
 Cada carpeta contiene 200 imágenes limpias obtenidas desde la web.
+
+# Ejecucion paso a paso 
+
+## 1. Ingresar a powershell 
+
+
+## 2. Se crea un entorno virtual 
+
+
+
+
 
 # Resultados del proceso
 
@@ -337,6 +309,16 @@ Mutex
 - Documentación clara y técnica para evaluación académica
 
 Este punto es la base del proyecto completo, permitiendo construir la base de imágenes que alimentará el modelo de clasificación (punto 2) y el sistema de detección en tiempo real (puntos 3 y 4).
+
+
+
+
+
+
+
+
+
+
 
 # PUNTO 2 — Desarrollo Completo del ETL (Extracción, Transformación y Carga)
 
@@ -502,6 +484,15 @@ La arquitectura ETL es profesional, modular y escalable, lista para integrarse c
 # Imágenes
 
 <img width="876" height="437" alt="image" src="https://github.com/user-attachments/assets/1e53dcbe-7128-4060-a0f9-eaa577819b9b" />
+
+
+
+
+
+
+
+
+
 
 # PUNTO 3 — Sistema de Clasificación de Objetos + Detección y Velocidad de Personas (Modelo Simple + OpenCV HOG + Multithreading)
 
@@ -728,6 +719,17 @@ Los hilos funcionan de manera segura mediante locks y semáforos.
 La interfaz en Streamlit es clara, funcional y permite alternar entre vistas sin detener la cámara.
 
 Sistema apto para laboratorios inteligentes, robótica o vigilancia.
+
+
+
+
+
+
+
+
+
+
+
 
 # 4. Despliegue de la Aplicación (Docker + Streamlit WebApp)
 
