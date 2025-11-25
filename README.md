@@ -297,16 +297,325 @@ Este punto es la base del proyecto completo, permitiendo construir la base de im
 
 # PUNTO 2 — Desarrollo Completo del ETL (Extracción, Transformación y Carga)
 
-El objetivo del segundo punto es construir un pipeline ETL profesional que permita:
-- Organizar y limpiar las imágenes obtenidas en el scraping. 
-- Detectar archivos corruptos o ilegibles.
-- Preprocesar y estandarizar todo el dataset.
-- Transformar cada imagen a un formato óptimo para clasificación.
-- Cargar la información procesada en una estructura final lista para entrenar un modelo.
+El objetivo del Punto 2 es crear una Base de Datos completamente funcional, diseñada para almacenar las 200 imágenes por clase obtenidas en el scraping, manteniendo orden, trazabilidad y soporte para el modelo de clasificación y demás puntos del proyecto.
+## Este apartado documenta:
+- Diseño del modelo relacional
+- Creación de la base de datos
+- Tablas y relaciones
+- Carga masiva automatizada de las imágenes
+- Evidencias del correcto funcionamiento
+- Estructura final del sistema
 
-Este apartado documenta toda la arquitectura creada, sus módulos y el flujo de datos paso a paso.
+# 2.1. Objetivo del Módulo de Base de Datos
+
+La base de datos debe permitir:
+- Registrar cada clase (raspberry, osciloscopio, etc.).
+- Registrar las 200 imágenes procesadas por clase.
+- Guardar metadatos útiles para el modelo (ruta, tamaño, hash, fecha).
+- Evitar duplicados.
+- Integrarse con el ETL y con el clasificador.
+- Consultar fácilmente el dataset completo.
+
+Para este proyecto se usó SQLite porque:
+
+- No requiere servido
+- Es portable
+- Funciona en cualquier entorno, incluyendo Docker}
+- Perfecto para datasets ligeros
+
+# 2.2. Modelo Relacional de la Base de Datos
+
+El sistema se basa en dos tablas principales:
+
+## 1. Tabla clases
+
+Contiene las categorías del dataset.
+
+| Campo       | Tipo        | Descripción                          |
+| ----------- | ----------- | ------------------------------------ |
+| id          | INTEGER PK  | ID único                             |
+| nombre      | TEXT UNIQUE | Nombre de la clase (ej: "raspberry") |
+| descripcion | TEXT        | Descripción opcional                 |
+
+## 2. Tabla imagenes
+
+Registra cada imagen del scraping o del ETL.
+
+| Campo          | Tipo       | Descripción                     |
+| -------------- | ---------- | ------------------------------- |
+| id             | INTEGER PK | ID único                        |
+| clase_id       | INTEGER FK | Relación con clase              |
+| ruta           | TEXT       | Ruta del archivo en el sistema  |
+| hash           | TEXT       | Hash MD5 para evitar duplicados |
+| ancho          | INTEGER    | Ancho en px                     |
+| alto           | INTEGER    | Alto en px                      |
+| fecha_registro | TEXT       | Fecha de inserción              |
+
+## Diagrama relacional
+```
+clases (1)  -------------------  (N) imagenes
+      id   <------------------   clase_id
+```
+# 2.3. Creación de la Base de Datos
+## Se crea la carpeta para la pase de datos 
+<img width="1105" height="67" alt="image" src="https://github.com/user-attachments/assets/cfa3d7db-8633-48ac-99cc-f7a204cc9744" />
+## Se ingresa a la carpeta y se verifica que este vacia 
+<img width="1237" height="287" alt="image" src="https://github.com/user-attachments/assets/cd96f58a-9bbf-425f-9527-6996b09239bb" />
+## Se crea el archivo dataset para crear las tablas 
+<img width="1082" height="130" alt="image" src="https://github.com/user-attachments/assets/f75713ff-2319-44ca-9c21-8275f26aa8ac" />
+## Se crea base de datos
+<img width="1305" height="78" alt="image" src="https://github.com/user-attachments/assets/a1afc74f-38b7-4cb7-a9bd-633d383ac86f" />
+```
+import sqlite3
+conn = sqlite3.connect("dataset.db")
+cur = conn.cursor()
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS clases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT UNIQUE NOT NULL,
+    descripcion TEXT
+);
+""")
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS imagenes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clase_id INTEGER NOT NULL,
+    ruta TEXT NOT NULL,
+    hash TEXT NOT NULL UNIQUE,
+    ancho INTEGER,
+    alto INTEGER,
+    fecha_registro TEXT,
+    FOREIGN KEY(clase_id) REFERENCES clases(id)
+);
+""")
+
+conn.commit()
+conn.close()
+print("✔ Base de datos creada exitosamente")
+
+```
+## Se crea las clases 
+<img width="1313" height="386" alt="image" src="https://github.com/user-attachments/assets/21fd71f9-4b8d-4b79-a429-af1408885406" />
+```
+import sqlite3
+
+DB_PATH = "dataset.db"
+
+clases = [
+    ("bombilla", "Dispositivo de iluminación"),
+    ("condensador", "Componente que almacena energía"),
+    ("destornillador", "Herramienta manual para tornillos"),
+    ("fuente_dual", "Fuente de alimentación dual"),
+    ("generador_de_senales", "Generador de señales electrónica"),  # SIN Ñ
+    ("multimetro", "Instrumento de medición eléctrica"),
+    ("osciloscopio", "Instrumento para visualizar señales"),
+    ("pinzas", "Herramienta para manipular componentes"),
+    ("raspberry", "Computadora de placa reducida"),
+    ("transistor", "Componente semiconductor de tres terminales")
+]
+
+conn = sqlite3.connect(DB_PATH)
+cur = conn.cursor()
+
+print("Insertando clases en la base de datos...\n")
+
+for clase, desc in clases:
+    try:
+        cur.execute("INSERT INTO clases (nombre, descripcion) VALUES (?, ?)", (clase, desc))
+        print(f"✔ Clase insertada: {clase}")
+    except sqlite3.IntegrityError:
+        print(f"⚠ Clase ya existía: {clase}")
+
+conn.commit()
+conn.close()
+
+print("\n✔ Inserción completa")
+
+```
+## Se crea la carga de imagenes 
+<img width="1918" height="723" alt="image" src="https://github.com/user-attachments/assets/3160e5a4-b3a6-4a9d-a69c-b474b6e8f00b" />
+```
+import sqlite3
+import os
+import cv2
+import hashlib
+from datetime import datetime
+
+# ==============================
+# CONFIGURACIÓN
+# ==============================
+
+DB_PATH = "dataset.db"
+
+# Ruta con tus 10 carpetas de imágenes
+IMAGES_ROOT = r"C:/Users/Lenovo/Desktop/Proyecto final 2/1. Primer punto/scraping/images/"
+
+# ==============================
+# FUNCIONES AUXILIARES
+# ==============================
+
+def calcular_hash(path):
+    """Genera hash MD5 único por imagen."""
+    try:
+        with open(path, "rb") as f:
+            return hashlib.md5(f.read()).hexdigest()
+    except:
+        return None
 
 
+def get_image_size(path):
+    """Obtiene dimensiones de la imagen."""
+    try:
+        img = cv2.imread(path)
+        if img is None:
+            return None, None
+        h, w = img.shape[:2]
+        return w, h
+    except:
+        return None, None
+
+# ==============================
+# CONEXIÓN A LA BD
+# ==============================
+
+conn = sqlite3.connect(DB_PATH)
+cur = conn.cursor()
+
+print("📌 Conectado a la base de datos")
+
+cur.execute("SELECT id, nombre FROM clases")
+clases_db = {nombre: cid for cid, nombre in cur.fetchall()}
+
+print("📌 Clases detectadas:", clases_db)
+
+# ==============================
+# RECORRER TODAS LAS CARPETAS
+# ==============================
+
+insertados_total = 0
+
+for clase_nombre, clase_id in clases_db.items():
+    carpeta = os.path.join(IMAGES_ROOT, clase_nombre)
+
+    if not os.path.exists(carpeta):
+        print(f"⚠ La carpeta '{carpeta}' no existe. Saltando...")
+        continue
+
+    print(f"\n🔎 Procesando clase: {clase_nombre}")
+
+    for archivo in os.listdir(carpeta):
+        ruta_img = os.path.join(carpeta, archivo)
+
+        if not ruta_img.lower().endswith((".jpg", ".jpeg", ".png")):
+            continue
+
+        hash_img = calcular_hash(ruta_img)
+
+        if hash_img is None:
+            print(f"❌ Error leyendo: {ruta_img}")
+            continue
+
+        w, h = get_image_size(ruta_img)
+        fecha = datetime.now().isoformat()
+
+        try:
+            cur.execute("""
+                INSERT INTO imagenes (clase_id, ruta, hash, ancho, alto, fecha_registro)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (clase_id, ruta_img, hash_img, w, h, fecha))
+
+            insertados_total += 1
+
+        except sqlite3.IntegrityError:
+            print(f"⚠ Imagen duplicada: {ruta_img}")
+            continue
+
+conn.commit()
+conn.close()
+
+print("\n✔ PROCESO FINALIZADO ✔")
+print(f" Total de imágenes insertadas: {insertados_total}")
+
+```
+
+## 2.3.1. ¿Cómo detecta la aplicación si una imagen es buena o mala?
+Tu aplicación considera que una imagen es buena cuando:
+- La imagen puede abrirse
+Usamos esta línea:
+```
+img = cv2.imread(path)
+```
+
+Si img es None, OpenCV no pudo leerla → imagen dañada o no válida.
+
+- La imagen tiene ancho y alto
+
+Si cv2.imread() sí logra leerla:
+```
+h, w = img.shape[:2]
+```
+
+Si shape no existe, la imagen es mala.
+
+🔴 ¿Qué ocurre con una imagen mala o dañada?
+
+cv2.imread() devuelve None
+
+El programa muestra:
+
+❌ Error leyendo: ruta_de_la_imagen
+
+
+Esa imagen no se inserta en la base de datos
+
+Por eso tu BD queda limpia: solo imágenes válidas entran.
+
+✅ 2. ¿Cómo detecta la aplicación imágenes repetidas?
+
+El sistema usa un hash MD5, que es una especie de “huella digital” única generada a partir del contenido de la imagen.
+
+En el código:
+
+hashlib.md5(f.read()).hexdigest()
+
+
+Esto significa:
+
+Si 2 imágenes son idénticas, su MD5 será exactamente igual
+
+Si una imagen cambia 1 solo pixel, tendrá un hash diferente
+
+🔍 ¿Cómo se evita insertar duplicados?
+
+En la tabla imagenes, definimos:
+
+hash TEXT NOT NULL UNIQUE
+
+
+Eso significa que no se pueden repetir hashes.
+
+Cuando el script intenta insertar una imagen repetida:
+
+cur.execute(...)
+
+
+SQLite encuentra que el hash ya existe → lanza:
+
+sqlite3.IntegrityError
+
+
+Y nuestro código captura esto:
+
+print(f"⚠ Imagen duplicada: {ruta_img}")
+
+
+y NO inserta la imagen duplicada.
+
+
+
+  
 # Arquitectura General del ETL
 
 El pipeline se divide en 3 módulos principales:
