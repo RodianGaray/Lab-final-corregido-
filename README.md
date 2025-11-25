@@ -1265,129 +1265,28 @@ Este proyecto fue completamente contenedorizado, ejecutado y desplegado usando D
 <img width="1884" height="809" alt="image" src="https://github.com/user-attachments/assets/1bebb2d7-9d09-4257-8bef-3e924d0359f5" />
 
 ## Se suben las imagenes de docker a dockerhub
+
 <img width="1422" height="390" alt="image" src="https://github.com/user-attachments/assets/7ccb3647-7def-4267-9865-53a7b43223c8" />
 
+## Se evidencia las imagenes en dockerhub
+
+<img width="1200" height="937" alt="image" src="https://github.com/user-attachments/assets/996b05c8-0935-4605-b007-3d3264c98f39" />
 
 
+## 4.2.1 COMANDOS QUE DEBEN EJECUTAR EN CUALQUIER PC
 
-
-
-
-
-
-
-
-
-# 4. Despliegue de la Aplicación (Docker + Streamlit WebApp)
-
-Este proyecto fue completamente contenedorizado, ejecutado y desplegado usando Docker y Streamlit, cumpliendo todos los requisitos del cuarto punto del entregable. A continuación se muestra el procedimiento completo.
-
-#  4.1. Construcción del contenedor Docker
-
-El proyecto incluye un Dockerfile totalmente funcional.
-Para construir la imagen localmente:
-```python
-docker build -t streamlit-detector .
+### App de detección de objetos:
+```
+docker pull rodian09/objetos_app:latest
+docker run -p 8501:8501 rodian09/objetos_app:latest
+```
+### App de análisis de velocidad:
 
 ```
-Una vez finalizada la compilación, confirmar que la imagen existe:
-```python
-docker images
+
+docker pull rodian09/velocidad_app:latest
+docker run -p 8502:8502 rodian09/velocidad_app:latest
 ```
-
- La imagen debe aparecer como streamlit-detector.
-
- <img width="1280" height="650" alt="image" src="https://github.com/user-attachments/assets/c155f91d-423f-4be8-b6ae-cb07151bbf1b" />
-
-
- # 4.2. Ejecución local del contenedor
-
-Para ejecutar el contenedor en tu propio equipo, usé el siguiente comando:
-
-docker run -p 8501:8501 --name visionapp streamlit-detector
-
-
-Luego, abrir en el navegador:
-
- http://localhost:8501
-
-Donde se cargan simultáneamente:
-
-- Detector de Velocidad (MediaPipe + tracking)
-
-- Detector de Objetos (modelo simple entrenado)
-
-- Interfaz Streamlit con ambas vistas lado a lado
-
-### 4.3. Despliegue de la imagen en Docker Hub
-
-La imagen final fue subida al repositorio público:
-
-Docker Hub:
- https://hub.docker.com/r/jefersonmvp/streamlit-detector
-
-Para descargarla y ejecutarla desde cualquier equipo:
-```python
-docker pull jefersonmvp/streamlit-detector
-docker run -p 8501:8501 jefersonmvp/streamlit-detector
-```
-
-#  4.4. Despliegue de la aplicación vía Streamlit Web
-
-La aplicación también se despliega vía Streamlit Web, permitiendo acceso desde navegador sin instalación local:
-
-Contiene:
-
-Interfaz doble (Velocidad + Objetos)
-
-Hilos independientes
-
-FPS en tiempo real
-
-Sincronización entre pipelines
-
-Procesamiento simultáneo por la misma cámara
-
-(https://hub.docker.com/r/jefersonmvp/streamlit-detector)
-
-# 4.5. Evidencias del despliegue
-🔧 Ejecución correcta del contenedor
-
-<img width="1280" height="655" alt="image" src="https://github.com/user-attachments/assets/47f3da5f-094b-4f9a-a61a-07af2699ccd2" />
-
- Streamlit funcionando con doble vista
-
-<img width="1278" height="855" alt="image" src="https://github.com/user-attachments/assets/71bce428-0eb8-4870-980e-3118a7bba636" />
-
-<img width="1280" height="655" alt="image" src="https://github.com/user-attachments/assets/e72dd60d-f3a1-46ea-8d33-16bcd378cc01" />
-
- Detector de Objetos funcionando
-
-<img width="1280" height="574" alt="image" src="https://github.com/user-attachments/assets/2770e177-0901-4268-83f2-b606ad2080eb" />
-
-<img width="1280" height="554" alt="image" src="https://github.com/user-attachments/assets/5401add8-41dc-467a-88cc-d0fe7c2eba9e" />
-
-<img width="1280" height="606" alt="image" src="https://github.com/user-attachments/assets/59060e1d-bb4a-475e-870f-ae1de67f5649" />
-
-<img width="1280" height="621" alt="image" src="https://github.com/user-attachments/assets/4534a711-4fd3-4616-8527-ced27c50efb7" />
-
-<img width="1280" height="598" alt="image" src="https://github.com/user-attachments/assets/70ba03c7-0d02-4238-9f6c-a810ccc9c485" />
-
-<img width="1280" height="574" alt="image" src="https://github.com/user-attachments/assets/967fddb4-cb3f-4e42-a7c1-76accb72dcae" />
-
-<img width="1280" height="641" alt="image" src="https://github.com/user-attachments/assets/72aad00c-4cb7-46a1-bf75-d13222009a86" />
-
-<img width="1280" height="596" alt="image" src="https://github.com/user-attachments/assets/af524f05-e7d2-4f8c-bdfa-3b1d60e97541" />
-
-<img width="1280" height="636" alt="image" src="https://github.com/user-attachments/assets/64f39c9f-a317-4861-a963-a2b6b4036e14" />
-
-
-Detector de Velocidad funcionando
-
-<img width="1176" height="864" alt="image" src="https://github.com/user-attachments/assets/be4cc872-133c-4071-9db4-f819dee178e8" />
-
-<img width="1278" height="855" alt="image" src="https://github.com/user-attachments/assets/e6875ffc-49e9-4fec-8246-c598ee9faff4" />
-
 
 ### 4.6. Conclusiones del despliegue
 
