@@ -740,81 +740,111 @@ C:\Users\Lenovo\Desktop\Proyecto final 2\1. Primer punto\scraping\images
   - Pestañas: `Objetos` (muestra bbox y etiqueta) y `Velocidad` (muestra centroides, bbox, ID y velocidad).
   - Botones para controlar iniciar/detener, entrenar y calibrar.
  
-## Codigo min completo 
+## Codigo objetos 
 
 ```
-
 import os
 import time
 import threading
-import math
 import cv2
 import numpy as np
-import mediapipe as mp
-from sklearn.linear_model import LogisticRegression
-from joblib import dump, load
 import streamlit as st
+from joblib import dump, load
+from sklearn.linear_model import LogisticRegression
 
 # -------------------------
-# CONFIG (ajusta si quieres)
+# CONFIG - Ajusta si hace falta
 # -------------------------
-MODEL_PATH = r"C:\Users\Lenovo\Desktop\Proyecto final 2\3. Tercer punto\efficientdet_lite0.tflite"
 DATABASE_PATH = r"C:\Users\Lenovo\Desktop\Proyecto final 2\1. Primer punto\scraping\images"
 MODEL_DIR = r"C:\Users\Lenovo\Desktop\Proyecto final 2\3. Tercer punto\model"
+MODEL_FILE = os.path.join(MODEL_DIR, "linear_model.joblib")
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# Default calibration (m/pixel). Puedes calibrarlo con calibrate() o con UI.
-DEFAULT_PIXELS_PER_METER = 80.0  # px per meter (ej: 80 px == 1 m). Ajusta tras calibración.
-CALIB_PATH = os.path.join(MODEL_DIR, "calibration.txt")
-MODEL_FILE = os.path.join(MODEL_DIR, "linear_model.joblib")
+IMG_SIZE = (256, 256)
 
-# Feature extraction params
-IMG_SIZE = (256, 256)  # para extracción de features en predictor
-
-# -------------------------
-# GLOBALS (compartidos entre hilos)
-# -------------------------
-shared = {
-    "frame": None,
-    "lock": threading.Lock(),
-    "running": False,
-    "fps": 0.0,
-    "predict_result": {"label": None, "prob": 0.0},
-    "people_tracks": [],  # lista de dicts: {'id', 'centroid', 'speed_px_s', 'speed_m_s', 'bbox'}
-}
-
-# Semaphore para limitar predicciones simultáneas (1)
+# Shared state
+shared = {"frame": None, "lock": threading.Lock(), "running": False, "fps": 0.0, "predict_result": {"label": None, "prob": 0.0}}
 predict_sema = threading.Semaphore(1)
 
 # -------------------------
-# UTIL: cargar calibration si existe
+# Feature extraction
 # -------------------------
-def load_calibration():
-    if os.path.exists(CALIB_PATH):
-        try:
-            with open(CALIB_PATH, "r") as f:
-                val = float(f.read().strip())
-                return val
-        except:
-            return DEFAULT_PIXELS_PER_METER
-    return DEFAULT_PIXELS_PER_METER
+def extract_features_kernels(img_bgr):
+    # input: BGR image (OpenCV)
+    img = cv2.resize(img_bgr, IMG_SIZE)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
 
-def save_calibration(pixels_per_meter):
-    with open(CALIB_PATH, "w") as f:
-        f.write(str(pixels_per_meter))
+    feats = []
+    # Sobel X,Y
+    sx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    sy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    feats += [sx.mean(), sx.std(), sy.mean(), sy.std()]
+
+    # Laplacian
+    lap = cv2.Laplacian(gray, cv2.CV_32F)
+    feats += [lap.mean(), lap.std()]
+
+    # Gabor bank (4 orientations)
+    ksize = 21
+    for theta in [0, np.pi/4, np.pi/2, 3*np.pi/4]:
+        kern = cv2.getGaborKernel((ksize, ksize), 4.0, theta, 10.0, 0.5, 0, ktype=cv2.CV_32F)
+        r = cv2.filter2D(gray, cv2.CV_32F, kern)
+        feats += [r.mean(), r.std()]
+
+    feats += [gray.mean(), gray.std()]
+    return np.array(feats, dtype=np.float32)
 
 # -------------------------
-# CamGrabber Thread
+# Dataset helpers and training
+# -------------------------
+def gather_dataset_features(db_path):
+    X = []
+    y = []
+    classes = []
+    if not os.path.exists(db_path):
+        raise FileNotFoundError(f"Ruta de dataset no encontrada: {db_path}")
+    for cls in sorted(os.listdir(db_path)):
+        cls_path = os.path.join(db_path, cls)
+        if not os.path.isdir(cls_path): continue
+        classes.append(cls)
+        for fn in os.listdir(cls_path):
+            if not fn.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")): continue
+            img_path = os.path.join(cls_path, fn)
+            img = cv2.imread(img_path)
+            if img is None:
+                continue
+            X.append(extract_features_kernels(img))
+            y.append(cls)
+    if len(X) == 0:
+        raise RuntimeError("No se encontraron imágenes en el dataset.")
+    return np.vstack(X), np.array(y), classes
+
+def train_linear_model(db_path=DATABASE_PATH, out_path=MODEL_FILE):
+    X, y, classes = gather_dataset_features(db_path)
+    from sklearn.preprocessing import LabelEncoder
+    le = LabelEncoder()
+    y_enc = le.fit_transform(y)
+    clf = LogisticRegression(multi_class="multinomial", solver="lbfgs", max_iter=800)
+    clf.fit(X, y_enc)
+    dump({"clf": clf, "le": le, "classes": classes}, out_path)
+    return clf, le, classes
+
+def load_linear_model(path=MODEL_FILE):
+    if not os.path.exists(path):
+        return None
+    return load(path)
+
+# -------------------------
+# Camera thread (simple)
 # -------------------------
 class CamGrabber(threading.Thread):
     def __init__(self, device=0):
         super().__init__(daemon=True)
         self.cap = cv2.VideoCapture(device)
-        # Ajustes básicos
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         self.stop_event = threading.Event()
-        self.last_time = time.time()
+        self.last_t = time.time()
 
     def run(self):
         while not self.stop_event.is_set():
@@ -824,457 +854,292 @@ class CamGrabber(threading.Thread):
                 continue
             with shared["lock"]:
                 shared["frame"] = frame.copy()
-            # fps
             now = time.time()
-            dt = now - self.last_time
-            if dt > 0:
-                shared["fps"] = 1.0 / dt
-            self.last_time = now
-            time.sleep(0.01)  # small sleep to yield
+            dt = now - self.last_t
+            shared["fps"] = 1.0/dt if dt>0 else 0.0
+            self.last_t = now
+            time.sleep(0.005)
         self.cap.release()
 
     def stop(self):
         self.stop_event.set()
 
 # -------------------------
-# Predictor: feature extraction (kernels) + linear classifier (W,b)
+# Predictor thread (clasifica crop central)
 # -------------------------
-def extract_features_kernels(img_rgb):
-    """
-    Extrae un vector de características simple:
-    - convierte a gris
-    - aplica Sobel X, Sobel Y, Laplacian y un conjunto corto de Gabor kernels
-    - hace pooling (mean, std) por cada respuesta
-    Devuelve vector 1D.
-    """
-    img = cv2.resize(img_rgb, IMG_SIZE)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-
-    feats = []
-
-    # Sobel X, Y
-    sx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-    sy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-    for arr in (sx, sy):
-        feats.append(arr.mean())
-        feats.append(arr.std())
-
-    # Laplacian
-    lap = cv2.Laplacian(gray, cv2.CV_32F)
-    feats.append(lap.mean()); feats.append(lap.std())
-
-    # Gabor bank: 4 kernels
-    ksize = 21
-    for theta in [0, np.pi/4, np.pi/2, 3*np.pi/4]:
-        kern = cv2.getGaborKernel((ksize, ksize), 4.0, theta, 10.0, 0.5, 0, ktype=cv2.CV_32F)
-        f = cv2.filter2D(gray, cv2.CV_32F, kern)
-        feats.append(f.mean()); feats.append(f.std())
-
-    # Global image stats
-    feats.append(gray.mean()); feats.append(gray.std())
-    return np.array(feats, dtype=np.float32)
-
-def gather_dataset_features(db_path):
-    """
-    Lee las carpetas por clase y extrae features para cada imagen.
-    Devuelve X (n x d) e y (labels).
-    """
-    classes = []
-    X = []
-    y = []
-    for cls in sorted(os.listdir(db_path)):
-        cls_path = os.path.join(db_path, cls)
-        if not os.path.isdir(cls_path): continue
-        classes.append(cls)
-        for fname in os.listdir(cls_path):
-            if not fname.lower().endswith((".jpg",".png",".jpeg","bmp")):
-                continue
-            img_path = os.path.join(cls_path, fname)
-            img = cv2.imread(img_path)
-            if img is None: continue
-            feat = extract_features_kernels(img)
-            X.append(feat)
-            y.append(cls)
-    if len(classes) == 0:
-        raise RuntimeError("No se encontraron clases en la ruta de dataset.")
-    return np.vstack(X), np.array(y), classes
-
-def train_linear_model(db_path=DATABASE_PATH, out_path=MODEL_FILE):
-    """
-    Entrena un clasificador lineal (LogisticRegression multinomial) sobre features.
-    Guarda el modelo en disk con joblib.
-    """
-    X, y, classes = gather_dataset_features(db_path)
-    # encode labels
-    from sklearn.preprocessing import LabelEncoder
-    le = LabelEncoder()
-    y_enc = le.fit_transform(y)
-    clf = LogisticRegression(multi_class="multinomial", solver="lbfgs", max_iter=500)
-    clf.fit(X, y_enc)
-    # save model + label encoder
-    dump({"clf": clf, "le": le, "classes": classes}, out_path)
-    return clf, le, classes
-
-def load_linear_model(path=MODEL_FILE):
-    if not os.path.exists(path):
-        return None
-    data = load(path)
-    return data["clf"], data["le"], data.get("classes", None)
-
 class PredictorThread(threading.Thread):
-    def __init__(self, use_tflite_detector=True):
+    def __init__(self):
         super().__init__(daemon=True)
         self.stop_event = threading.Event()
-        self.use_tflite = use_tflite_detector
-        # load linear model if available
         self.model_data = load_linear_model()
-        # prepare mediapipe detector if use_tflite True
-        self.detector = None
-        if self.use_tflite and os.path.exists(MODEL_PATH):
-            try:
-                from mediapipe.tasks import python
-                from mediapipe.tasks.python import vision
-                base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
-                opts = vision.ObjectDetectorOptions(base_options=base_options, score_threshold=0.35)
-                self.detector = vision.ObjectDetector.create_from_options(opts)
-                self.vision = vision
-            except Exception as e:
-                print("Warning: Mediapipe detector init failed:", e)
-                self.detector = None
 
     def run(self):
         while not self.stop_event.is_set():
-            # take a snapshot of the frame
             with shared["lock"]:
-                frame = None if shared["frame"] is None else shared["frame"].copy()
+                frame = shared["frame"].copy() if shared["frame"] is not None else None
             if frame is None:
-                time.sleep(0.02)
-                continue
-
-            # limit concurrency
-            acquired = predict_sema.acquire(timeout=1.0)
-            if not acquired:
-                time.sleep(0.01)
+                time.sleep(0.02); continue
+            if not predict_sema.acquire(timeout=0.4):
                 continue
             try:
-                # If we have a tflite detector and it found a bbox, classify the crop with linear model.
-                if self.detector is not None:
-                    try:
-                        mp_img = self.vision.Image(image_format=self.vision.ImageFormat.SRGB, data=frame)
-                        detections = self.detector.detect(mp_img).detections
-                    except Exception as e:
-                        detections = []
-                    if detections:
-                        # pick highest score detection
-                        best = sorted(detections, key=lambda d: max([c.score for c in d.categories]), reverse=True)[0]
-                        bbox = best.bounding_box
-                        x1 = int(bbox.origin_x); y1 = int(bbox.origin_y)
-                        x2 = x1 + int(bbox.width); y2 = y1 + int(bbox.height)
-                        # clip
-                        h, w = frame.shape[:2]
-                        x1, y1 = max(0,x1), max(0,y1)
-                        x2, y2 = min(w-1,x2), min(h-1,y2)
-                        crop = frame[y1:y2, x1:x2]
-                        if crop.size == 0:
-                            label, prob = "Desconocido", 0.0
-                        else:
-                            feat = extract_features_kernels(crop).reshape(1, -1)
-                            if self.model_data:
-                                clf, le, classes = self.model_data["clf"], self.model_data["le"], self.model_data.get("classes", None)
-                                pred_idx = clf.predict(feat)[0]
-                                probs = clf.predict_proba(feat)[0]
-                                prob = float(np.max(probs))
-                                label = str(le.inverse_transform([pred_idx])[0])
-                            else:
-                                # fallback simple heuristic: use mean intensity
-                                label, prob = "Unknown", 0.0
-                        shared["predict_result"] = {"label": label, "prob": prob, "bbox": (x1,y1,x2,y2)}
+                # crop central (si quieres puedes cambiar a crop basado en detección simple)
+                h, w = frame.shape[:2]
+                s = min(w, h) // 3
+                cx, cy = w // 2, h // 2
+                crop = frame[cy-s:cy+s, cx-s:cx+s]
+                label = "N/A"; prob = 0.0
+                if crop is not None and crop.size > 0:
+                    data = load_linear_model()  # reload in case model updated
+                    if data:
+                        feat = extract_features_kernels(crop).reshape(1, -1)
+                        clf = data["clf"]
+                        le = data["le"]
+                        pred_idx = clf.predict(feat)[0]
+                        probs = clf.predict_proba(feat)[0]
+                        prob = float(np.max(probs))
+                        label = str(le.inverse_transform([pred_idx])[0])
                     else:
-                        # no detection: fallback classify center crop
-                        h,w = frame.shape[:2]
-                        cx, cy = w//2, h//2
-                        s = min(w,h)//3
-                        crop = frame[cy-s:cy+s, cx-s:cx+s]
-                        if crop.size == 0:
-                            label, prob = None, 0.0
-                        else:
-                            feat = extract_features_kernels(crop).reshape(1,-1)
-                            if self.model_data:
-                                clf, le, classes = self.model_data["clf"], self.model_data["le"], self.model_data.get("classes", None)
-                                pred_idx = clf.predict(feat)[0]
-                                probs = clf.predict_proba(feat)[0]
-                                prob = float(np.max(probs))
-                                label = str(le.inverse_transform([pred_idx])[0])
-                            else:
-                                label, prob = None, 0.0
-                        shared["predict_result"] = {"label": label, "prob": prob, "bbox": None}
-                else:
-                    # No tflite detector available: classify center crop with linear model if exists
-                    h,w = frame.shape[:2]
-                    cx, cy = w//2, h//2
-                    s = min(w,h)//3
-                    crop = frame[cy-s:cy+s, cx-s:cx+s]
-                    if crop.size == 0:
-                        label, prob = None, 0.0
-                    else:
-                        feat = extract_features_kernels(crop).reshape(1,-1)
-                        if self.model_data:
-                            clf, le, classes = self.model_data["clf"], self.model_data["le"], self.model_data.get("classes", None)
-                            pred_idx = clf.predict(feat)[0]
-                            probs = clf.predict_proba(feat)[0]
-                            prob = float(np.max(probs))
-                            label = str(le.inverse_transform([pred_idx])[0])
-                        else:
-                            label, prob = None, 0.0
-                    shared["predict_result"] = {"label": label, "prob": prob, "bbox": None}
+                        label = "Modelo no entrenado"
+                        prob = 0.0
+                with shared["lock"]:
+                    shared["predict_result"] = {"label": label, "prob": prob}
             finally:
                 try:
                     predict_sema.release()
                 except:
                     pass
-            time.sleep(0.05)
+                time.sleep(0.03)
 
     def stop(self):
         self.stop_event.set()
 
 # -------------------------
-# PeopleSpeedThread: HOG detector + simple centroid tracker
+# STREAMLIT UI
 # -------------------------
-class PeopleSpeedThread(threading.Thread):
-    def __init__(self, pixels_per_meter=None):
+st.set_page_config(layout="wide")
+st.title("App objetos laboratorio")
+
+# session threads
+if "cam_thread" not in st.session_state: st.session_state.cam_thread = None
+if "pred_thread" not in st.session_state: st.session_state.pred_thread = None
+
+col1, col2 = st.columns([1,1])
+with col1:
+    start_btn = st.button("Iniciar cámara")
+    stop_btn = st.button("Detener cámara")
+with col2:
+    train_btn = st.button("Entrenar modelo (usa la carpeta images)")
+    delete_model_btn = st.button("Borrar modelo actual (si existe)")
+
+st.write(f"Dataset path: `{DATABASE_PATH}`")
+st.write("Asegúrate de tener 200 imágenes por clase en subcarpetas dentro de `images/`")
+
+# actions
+if train_btn:
+    st.info("Entrenando modelo... esto puede tardar (según tu dataset). Revisa consola.")
+    try:
+        clf, le, classes = train_linear_model()
+        st.success(f"Modelo entrenado. Clases: {classes}")
+    except Exception as e:
+        st.error(f"Error entrenando: {e}")
+
+if delete_model_btn:
+    if os.path.exists(MODEL_FILE):
+        os.remove(MODEL_FILE); st.success("Modelo eliminado.")
+    else:
+        st.info("No existía modelo.")
+
+if start_btn and st.session_state.cam_thread is None:
+    st.session_state.cam_thread = CamGrabber(device=0)
+    st.session_state.cam_thread.start()
+    st.session_state.pred_thread = PredictorThread()
+    st.session_state.pred_thread.start()
+    shared["running"] = True
+    st.success("Cámara iniciada (local).")
+
+if stop_btn and st.session_state.cam_thread is not None:
+    st.session_state.cam_thread.stop()
+    st.session_state.pred_thread.stop()
+    st.session_state.cam_thread = None
+    st.session_state.pred_thread = None
+    shared["running"] = False
+    st.success("Sistema detenido.")
+
+# display
+img_slot = st.empty(); info_slot = st.empty(); fps_slot = st.empty()
+while shared.get("running", False):
+    with shared["lock"]:
+        frame = shared["frame"].copy() if shared["frame"] is not None else None
+        pred = dict(shared["predict_result"])
+        fps = shared["fps"]
+    if frame is not None:
+        # annotate predicted label
+        txt = f"{pred.get('label','N/A')} ({pred.get('prob',0.0):.2f})"
+        cv2.putText(frame, txt, (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,255,0), 2)
+        img_slot.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_column_width=True)
+        info_slot.write(f"Predicción: **{pred.get('label','N/A')}**  Prob: **{pred.get('prob',0.0):.2f}**")
+        fps_slot.write(f"FPS: {fps:.1f}")
+    time.sleep(0.05)
+
+
+```
+
+## Codigo Velocidad
+
+```
+# app_velocidad.py
+import os
+import time
+import threading
+import math
+import cv2
+import numpy as np
+import streamlit as st
+
+MODEL_DIR = r"C:\Users\Lenovo\Desktop\Proyecto final 2\3. Tercer punto\model"
+os.makedirs(MODEL_DIR, exist_ok=True)
+CALIB_PATH = os.path.join(MODEL_DIR, "calibration.txt")
+DEFAULT_PPM = 80.0
+
+shared = {"frame": None, "lock": threading.Lock(), "running": False, "fps": 0.0, "people_tracks": []}
+
+def load_calib():
+    if os.path.exists(CALIB_PATH):
+        try:
+            return float(open(CALIB_PATH).read().strip())
+        except:
+            return DEFAULT_PPM
+    return DEFAULT_PPM
+
+def save_calib(v):
+    open(CALIB_PATH,"w").write(str(float(v)))
+
+class CamGrabber(threading.Thread):
+    def __init__(self, dev=0):
         super().__init__(daemon=True)
-        self.stop_event = threading.Event()
-        self.hog = cv2.HOGDescriptor()
-        self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-        self.tracks = {}  # id -> {'centroid':(x,y), 'last_t':t, 'age':0}
+        self.cap = cv2.VideoCapture(dev)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640); self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
+        self.stop_event = threading.Event(); self.last=time.time()
+    def run(self):
+        while not self.stop_event.is_set():
+            ret, frame = self.cap.read()
+            if not ret:
+                time.sleep(0.01); continue
+            with shared["lock"]:
+                shared["frame"] = frame.copy()
+            now=time.time(); dt=now-self.last
+            shared["fps"] = 1.0/dt if dt>0 else 0.0; self.last=now
+            time.sleep(0.005)
+        self.cap.release()
+    def stop(self): self.stop_event.set()
+
+class PeopleSpeedThread(threading.Thread):
+    def __init__(self, ppm=None):
+        super().__init__(daemon=True)
+        self.hog = cv2.HOGDescriptor(); self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+        self.tracks = {}  # id -> {cx,cy,t,speed_px,speed_m,bbox}
         self.next_id = 0
-        self.max_age = 1.5  # s
-        self.pixels_per_meter = pixels_per_meter if pixels_per_meter is not None else load_calibration()
-        self.lock = threading.Lock()
+        self.max_age = 1.5
+        self.ppm = ppm if ppm else load_calib()
+        self.stop_event = threading.Event()
 
     def run(self):
         while not self.stop_event.is_set():
             with shared["lock"]:
-                frame = None if shared["frame"] is None else shared["frame"].copy()
+                frame = shared["frame"].copy() if shared["frame"] is not None else None
             if frame is None:
-                time.sleep(0.02)
-                continue
+                time.sleep(0.02); continue
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            rects, weights = self.hog.detectMultiScale(gray, winStride=(8,8), padding=(8,8), scale=1.05)
+            rects, _ = self.hog.detectMultiScale(gray, winStride=(8,8), padding=(8,8), scale=1.05)
+            now = time.time()
             detections = []
             for (x,y,w,h) in rects:
-                cx = x + w//2; cy = y + h//2
-                detections.append({'bbox':(x,y,w,h), 'centroid':(cx,cy)})
-            now = time.time()
-            # associate detections to existing tracks by nearest centroid
+                cx,cy = x+w//2, y+h//2
+                detections.append((x,y,w,h,cx,cy))
             assigned = set()
-            for det in detections:
-                cx, cy = det['centroid']
-                best_id = None
-                best_dist = 1e9
-                for tid, track in list(self.tracks.items()):
-                    tx, ty = track['centroid']
-                    d = math.hypot(cx - tx, cy - ty)
-                    if d < best_dist:
-                        best_dist = d
-                        best_id = tid
-                if best_id is None or best_dist > 100:  # threshold for new track
-                    # new track
-                    tid = self.next_id
-                    self.next_id += 1
-                    self.tracks[tid] = {'centroid':(cx,cy), 'last_t':now, 'age':0, 'bbox':det['bbox']}
-                    det['id'] = tid
-                    det['speed_px_s'] = 0.0
-                    det['speed_m_s'] = 0.0
+            for x,y,w,h,cx,cy in detections:
+                best = None; bd = 1e9
+                for tid,t in self.tracks.items():
+                    d = math.hypot(cx - t["cx"], cy - t["cy"])
+                    if d < bd:
+                        bd = d; best = tid
+                if best is None or bd > 100:
+                    tid = self.next_id; self.next_id += 1
+                    self.tracks[tid] = {"cx":cx,"cy":cy,"t":now,"speed_px":0.0,"speed_m":0.0,"bbox":(x,y,w,h)}
                 else:
-                    # update existing
-                    prev = self.tracks[best_id]
-                    dt = now - prev['last_t'] if prev['last_t'] else 0.0001
-                    dist_px = math.hypot(cx - prev['centroid'][0], cy - prev['centroid'][1])
-                    speed_px_s = dist_px / dt if dt>0 else 0.0
-                    speed_m_s = (speed_px_s / self.pixels_per_meter) if self.pixels_per_meter>0 else 0.0
-                    # update track
-                    self.tracks[best_id] = {'centroid':(cx,cy), 'last_t':now, 'age':0, 'bbox':det['bbox']}
-                    det['id'] = best_id
-                    det['speed_px_s'] = speed_px_s
-                    det['speed_m_s'] = speed_m_s
-                assigned.add(det['id'])
-
-            # increase age of unassigned tracks and remove stale
-            stale = []
-            for tid, track in list(self.tracks.items()):
-                if tid not in assigned:
-                    track['age'] = track.get('age',0) + 0.1
-                    if time.time() - track['last_t'] > self.max_age:
-                        stale.append(tid)
-            for tid in stale:
-                del self.tracks[tid]
-
-            # build shared list for UI
+                    prev = self.tracks[best]
+                    dt = now - prev["t"]
+                    dist = math.hypot(cx - prev["cx"], cy - prev["cy"])
+                    sp = dist/dt if dt>0 else 0.0
+                    sm = sp / (self.ppm if self.ppm>0 else 1.0)
+                    self.tracks[best] = {"cx":cx,"cy":cy,"t":now,"speed_px":sp,"speed_m":sm,"bbox":(x,y,w,h)}
+                    tid = best
+                assigned.add(tid)
+            # remove stale
+            for tid in list(self.tracks.keys()):
+                if tid not in assigned and now - self.tracks[tid]["t"] > self.max_age:
+                    del self.tracks[tid]
             ppl = []
-            for tid, track in self.tracks.items():
-                cx, cy = track['centroid']
-                bbox = track.get('bbox', None)
-                # compute speed approximate: last calculation may be missing for new tracks -> zero
-                # find previously assigned det entry if any to get speed (we set det entries above)
-                # fallback speed 0
-                speed_px = 0.0; speed_m = 0.0
-                # store item
-                ppl.append({'id': tid, 'centroid': (int(cx),int(cy)), 'speed_px_s': speed_px, 'speed_m_s': speed_m, 'bbox': bbox})
+            for tid,t in self.tracks.items():
+                ppl.append({"id":tid,"centroid":(int(t["cx"]),int(t["cy"])),"speed_px_s":t["speed_px"],"speed_m_s":t["speed_m"],"bbox":t["bbox"]})
             with shared["lock"]:
                 shared["people_tracks"] = ppl
             time.sleep(0.05)
+    def stop(self): self.stop_event.set()
 
-    def stop(self):
-        self.stop_event.set()
+# --- Streamlit UI ---
+st.set_page_config(layout="wide")
+st.title("App Velocidad ")
 
-# -------------------------
-# Streamlit UI + Control
-# -------------------------
-st.set_page_config(layout="wide", page_title="Lab Detector - Punto 3")
-st.title("Lab Detector - Punto 3 (CamGrabber | Predictor | PeopleSpeed)")
+if "cam_thread" not in st.session_state: st.session_state.cam_thread=None
+if "people_thread" not in st.session_state: st.session_state.people_thread=None
 
-# Session state for threads
-if "cam_thread" not in st.session_state:
-    st.session_state.cam_thread = None
-if "pred_thread" not in st.session_state:
-    st.session_state.pred_thread = None
-if "people_thread" not in st.session_state:
-    st.session_state.people_thread = None
+c1,c2 = st.columns(2)
+with c1:
+    start = st.button("Iniciar cámara")
+    stop = st.button("Detener cámara")
+with c2:
+    ppm = st.number_input("Pixels por metro (px/m):", value=float(load_calib()))
+    save_btn = st.button("Guardar calibración")
 
-col1, col2 = st.columns([1, 1])
-with col1:
-    start_btn = st.button("Iniciar Sistema")
-    stop_btn = st.button("Detener Sistema")
+if save_btn:
+    save_calib(ppm); st.success("Calibración guardada.")
 
-with col2:
-    train_btn = st.button("Entrenar Clasificador Lineal (W,b) con dataset")
-    calibrate_btn = st.button("Guardar calibración (pixels_per_meter)")
-    ppm_input = st.number_input("Pixels per meter (px per 1 m)", value=float(load_calibration()))
+if start and st.session_state.cam_thread is None:
+    st.session_state.cam_thread = CamGrabber(); st.session_state.cam_thread.start()
+    st.session_state.people_thread = PeopleSpeedThread(ppm); st.session_state.people_thread.start()
+    shared["running"] = True; st.success("Sistema iniciado (local).")
 
-# Actions
-if calibrate_btn:
-    save_calibration(float(ppm_input))
-    st.success(f"PIXELS_PER_METER guardado = {ppm_input}")
+if stop and st.session_state.cam_thread is not None:
+    st.session_state.cam_thread.stop(); st.session_state.people_thread.stop()
+    st.session_state.cam_thread = None; st.session_state.people_thread = None
+    shared["running"] = False; st.success("Sistema detenido.")
 
-if train_btn:
-    st.info("Extrayendo features y entrenando (puede tardar). Revisa consola si hay salida.")
-    try:
-        clf, le, classes = train_linear_model(DATABASE_PATH, MODEL_FILE)
-        dump({"clf":clf, "le":le, "classes":classes}, MODEL_FILE)
-        st.success("Modelo entrenado y guardado en model/")
-    except Exception as e:
-        st.error("Error entrenando modelo: " + str(e))
+img_slot = st.empty(); info_slot = st.empty()
 
-if start_btn and not st.session_state.cam_thread:
-    # create and start threads
-    st.session_state.cam_thread = CamGrabber(device=0)
-    st.session_state.cam_thread.start()
-    st.session_state.pred_thread = PredictorThread(use_tflite_detector=True)
-    st.session_state.pred_thread.start()
-    st.session_state.people_thread = PeopleSpeedThread(pixels_per_meter=float(ppm_input))
-    st.session_state.people_thread.start()
-    shared["running"] = True
-    st.success("Sistema iniciado")
-
-if stop_btn and st.session_state.cam_thread:
-    st.session_state.cam_thread.stop()
-    st.session_state.pred_thread.stop()
-    st.session_state.people_thread.stop()
-    st.session_state.cam_thread = None
-    st.session_state.pred_thread = None
-    st.session_state.people_thread = None
-    shared["running"] = False
-    st.success("Sistema detenido")
-
-# UI Tabs
-tab1, tab2 = st.tabs(["Objetos", "Velocidad"])
-
-with tab1:
-    st.subheader("Detección de Objetos")
-    img_slot = st.empty()
-    label_slot = st.empty()
-    fps_slot = st.empty()
-    while True:
-        if not shared["running"]:
-            img_slot.image(np.zeros((480,640,3), dtype=np.uint8), channels="BGR", caption="Sistema detenido")
-            break
-        with shared["lock"]:
-            frame = None if shared["frame"] is None else shared["frame"].copy()
-            pred = dict(shared.get("predict_result", {}))
-            fps = shared.get("fps", 0.0)
-        if frame is None:
-            time.sleep(0.05)
-            continue
-        # overlay bbox and label
-        if pred.get("bbox"):
-            x1,y1,x2,y2 = pred["bbox"]
-            cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),2)
-        label = pred.get("label", "N/A")
-        prob = pred.get("prob", 0.0)
-        cv2.putText(frame, f"{label} ({prob:.2f})", (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,255,0), 2)
-        fps_slot.write(f"FPS (captura): {fps:.1f}")
+while shared["running"]:
+    with shared["lock"]:
+        frame = shared["frame"].copy() if shared["frame"] is not None else None
+        ppl = list(shared["people_tracks"])
+        fps = shared["fps"]
+    if frame is not None:
+        for p in ppl:
+            x,y,w,h = p["bbox"]
+            cx,cy = p["centroid"]
+            cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
+            cv2.circle(frame, (cx,cy), 4, (0,0,255), -1)
+            cv2.putText(frame, f"ID {p['id']} {p['speed_m_s']:.2f} m/s", (cx+6,cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 2)
         img_slot.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_column_width=True)
-        label_slot.write(f"Predicción: **{label}**  Prob: **{prob:.2f}**")
-        time.sleep(0.06)
-    st.write("Modo objetos detenido")
+        info_slot.write(f"Tracks: {len(ppl)}")
+    time.sleep(0.05)
 
-with tab2:
-    st.subheader("Velocidad de Personas")
-    img_slot2 = st.empty()
-    tracks_slot = st.empty()
-    while True:
-        if not shared["running"]:
-            img_slot2.image(np.zeros((480,640,3), dtype=np.uint8), channels="BGR", caption="Sistema detenido")
-            break
-        with shared["lock"]:
-            frame = None if shared["frame"] is None else shared["frame"].copy()
-            ppl = list(shared.get("people_tracks", []))
-            fps = shared.get("fps", 0.0)
-        if frame is None:
-            time.sleep(0.05)
-            continue
-        # draw tracks
-        for t in ppl:
-            tid = t['id']
-            cx,cy = t['centroid']
-            bbox = t.get('bbox')
-            if bbox:
-                x,y,w,h = bbox
-                cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
-            cv2.circle(frame, (cx,cy), 5, (0,0,255), -1)
-            cv2.putText(frame, f"ID {tid}", (cx+8, cy-8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
-            cv2.putText(frame, f"{t['speed_m_s']:.2f} m/s", (cx+8, cy+16), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
-        img_slot2.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_column_width=True)
-        tracks_slot.write(f"Tracks activos: {len(ppl)}  | FPS: {fps:.1f}")
-        time.sleep(0.06)
-    st.write("Modo velocidad detenido")
 
-# cleanup on script end (Streamlit re-run)
-def _cleanup():
-    if st.session_state.cam_thread:
-        try:
-            st.session_state.cam_thread.stop()
-        except: pass
-    if st.session_state.pred_thread:
-        try:
-            st.session_state.pred_thread.stop()
-        except: pass
-    if st.session_state.people_thread:
-        try:
-            st.session_state.people_thread.stop()
-        except: pass
-
-# register cleanup when Streamlit session is closed
-st.on_event = _cleanup  # best effort placeholder; Streamlit lacks direct on_close handler
 ```
-
 ## Cómo ejecutar paso a paso 
 - A. Preparación del entorno
 - B. Ejecutar app de objetos (MediaPipe + modelo lineal)
 - C. Ejecutar app de velocidad (OpenCV2)
-- D. Ejecutar ambas apps con Docker
-- E. Publicar en DockerHub
+
 
 ## A. PREPARACIÓN DEL ENTORNO
 ### 1. Crear entorno virtual
@@ -1389,78 +1254,20 @@ streamlit run app_velocidad.py --server.address localhost
 
 
 # 4. Despliegue de la Aplicación (Docker + Streamlit WebApp)
+
 Este proyecto fue completamente contenedorizado, ejecutado y desplegado usando Docker y Streamlit, cumpliendo todos los requisitos del cuarto punto del entregable. A continuación se muestra el procedimiento completo.
 
 
 ## 4.1 EJECUTAR TODO CON DOCKER
 
-Necesitas dos Dockerfiles:
+## Se crean archivos docker 
 
-🟦 Dockerfile de objetos → Dockerfile_app_objetos
+<img width="1884" height="809" alt="image" src="https://github.com/user-attachments/assets/1bebb2d7-9d09-4257-8bef-3e924d0359f5" />
 
-Contenido:
-
-FROM python:3.10-slim
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY app_objetos.py .
-COPY model ./model
-COPY efficientdet_lite0.tflite .
-
-EXPOSE 8501
-
-CMD ["streamlit", "run", "app_objetos.py", "--server.address=0.0.0.0", "--server.port=8501"]
-
-Construir imagen:
-docker build -t objetos_app -f Dockerfile_app_objetos .
-
-Ejecutar:
-docker run -p 8501:8501 objetos_app
+## Se suben las imagenes de docker a dockerhub
+<img width="1422" height="390" alt="image" src="https://github.com/user-attachments/assets/7ccb3647-7def-4267-9865-53a7b43223c8" />
 
 
-Acceder en navegador:
-
-http://localhost:8501
-
-🟧 Dockerfile de velocidad → Dockerfile_app_velocidad
-
-Contenido:
-
-FROM python:3.10-slim
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY app_velocidad.py .
-COPY model ./model
-
-EXPOSE 8502
-
-CMD ["streamlit", "run", "app_velocidad.py", "--server.address=0.0.0.0", "--server.port=8502"]
-
-Construir:
-docker build -t velocidad_app -f Dockerfile_app_velocidad .
-
-Ejecutar:
-docker run -p 8502:8502 velocidad_app
-
-🟩 E. SUBIR A DOCKERHUB (pide la rúbrica)
-1️⃣ Log in:
-docker login
-
-2️⃣ Etiquetar imágenes:
-docker tag objetos_app TUUSUARIO/objetos_app
-docker tag velocidad_app TUUSUARIO/velocidad_app
-
-3️⃣ Subir:
-docker push TUUSUARIO/objetos_app
-docker push TUUSUARIO/velocidad_app
 
 
 
