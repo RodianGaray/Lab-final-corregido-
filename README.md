@@ -262,14 +262,19 @@ Cada carpeta contiene 200 imágenes limpias obtenidas desde la web.
 
 ## 1. Ingresar a powershell 
  <img width="955" height="502" alt="1" src="https://github.com/user-attachments/assets/8dcdff8c-97e0-44c8-8e2a-77dd1d24050e" />
+ 
 ## 2. Se crea un entorno virtual 
  <img width="959" height="502" alt="2" src="https://github.com/user-attachments/assets/c820dafe-d584-45d0-9752-a07e490be93a" />
+ 
 ## 3. Se instalan librerias necesarias 
  <img width="1895" height="804" alt="image" src="https://github.com/user-attachments/assets/6c150a27-0c93-4106-b4a4-3a1682168b20" />
+ 
 ## 4. Se ejecuta el archivo scraper
  <img width="817" height="545" alt="image" src="https://github.com/user-attachments/assets/489c66b9-811d-4cc4-bd5b-72e75f839f11" />
+ 
 ## 5. Se crea una carpeta llamada imagenes con todas las carpetas de imagemes
  <img width="1919" height="1010" alt="image" src="https://github.com/user-attachments/assets/97807015-3243-4adb-b489-c01b50cf05f2" />
+ 
 ## 6. Cada una cuenta con 200 imagenes como se evidencia en esta:
  <img width="1919" height="1005" alt="image" src="https://github.com/user-attachments/assets/61e71216-071f-4895-9b62-8579229b2a96" />
 
@@ -298,6 +303,7 @@ Este punto es la base del proyecto completo, permitiendo construir la base de im
 # PUNTO 2 — Desarrollo Completo del ETL (Extracción, Transformación y Carga)
 
 El objetivo del Punto 2 es crear una Base de Datos completamente funcional, diseñada para almacenar las 200 imágenes por clase obtenidas en el scraping, manteniendo orden, trazabilidad y soporte para el modelo de clasificación y demás puntos del proyecto.
+
 ## Este apartado documenta:
 - Diseño del modelo relacional
 - Creación de la base de datos
@@ -352,6 +358,7 @@ Registra cada imagen del scraping o del ETL.
 | fecha_registro | TEXT       | Fecha de inserción              |
 
 ## Diagrama relacional
+
 ```
 clases (1)  -------------------  (N) imagenes
       id   <------------------   clase_id
@@ -359,12 +366,16 @@ clases (1)  -------------------  (N) imagenes
 # 2.3. Creación de la Base de Datos
 ## Se crea la carpeta para la pase de datos 
 <img width="1105" height="67" alt="image" src="https://github.com/user-attachments/assets/cfa3d7db-8633-48ac-99cc-f7a204cc9744" />
+
 ## Se ingresa a la carpeta y se verifica que este vacia 
 <img width="1237" height="287" alt="image" src="https://github.com/user-attachments/assets/cd96f58a-9bbf-425f-9527-6996b09239bb" />
+
 ## Se crea el archivo dataset para crear las tablas 
 <img width="1082" height="130" alt="image" src="https://github.com/user-attachments/assets/f75713ff-2319-44ca-9c21-8275f26aa8ac" />
+
 ## Se crea base de datos
 <img width="1305" height="78" alt="image" src="https://github.com/user-attachments/assets/a1afc74f-38b7-4cb7-a9bd-633d383ac86f" />
+
 ```
 import sqlite3
 conn = sqlite3.connect("dataset.db")
@@ -394,11 +405,13 @@ CREATE TABLE IF NOT EXISTS imagenes (
 conn.commit()
 conn.close()
 print("✔ Base de datos creada exitosamente")
-
 ```
+
 ## Se crea las clases 
 <img width="1313" height="386" alt="image" src="https://github.com/user-attachments/assets/21fd71f9-4b8d-4b79-a429-af1408885406" />
+
 ```
+
 import sqlite3
 
 DB_PATH = "dataset.db"
@@ -432,11 +445,13 @@ conn.commit()
 conn.close()
 
 print("\n✔ Inserción completa")
-
 ```
+
 ## Se crea la carga de imagenes 
 <img width="1918" height="723" alt="image" src="https://github.com/user-attachments/assets/3160e5a4-b3a6-4a9d-a69c-b474b6e8f00b" />
+
 ```
+
 import sqlite3
 import os
 import cv2
@@ -537,15 +552,17 @@ conn.close()
 
 print("\n✔ PROCESO FINALIZADO ✔")
 print(f" Total de imágenes insertadas: {insertados_total}")
-
 ```
 
 ## 2.3.1. ¿Cómo detecta la aplicación si una imagen es buena o mala?
 Tu aplicación considera que una imagen es buena cuando:
 - La imagen puede abrirse
 Usamos esta línea:
+
 ```
+
 img = cv2.imread(path)
+
 ```
 
 Si img es None, OpenCV no pudo leerla → imagen dañada o no válida.
@@ -553,33 +570,39 @@ Si img es None, OpenCV no pudo leerla → imagen dañada o no válida.
 - La imagen tiene ancho y alto
 
 Si cv2.imread() sí logra leerla:
+
 ```
+
 h, w = img.shape[:2]
+
 ```
 
 Si shape no existe, la imagen es mala.
 
-🔴 ¿Qué ocurre con una imagen mala o dañada?
+## 2.3.2. ¿Qué ocurre con una imagen mala o dañada?
 
+```
 cv2.imread() devuelve None
-
+```
 El programa muestra:
 
 ❌ Error leyendo: ruta_de_la_imagen
-
 
 Esa imagen no se inserta en la base de datos
 
 Por eso tu BD queda limpia: solo imágenes válidas entran.
 
-✅ 2. ¿Cómo detecta la aplicación imágenes repetidas?
+## 2.3.3 ¿Cómo detecta la aplicación imágenes repetidas?
 
 El sistema usa un hash MD5, que es una especie de “huella digital” única generada a partir del contenido de la imagen.
 
-En el código:
+En el código:}
+
+```
 
 hashlib.md5(f.read()).hexdigest()
 
+```
 
 Esto significa:
 
@@ -587,12 +610,15 @@ Si 2 imágenes son idénticas, su MD5 será exactamente igual
 
 Si una imagen cambia 1 solo pixel, tendrá un hash diferente
 
-🔍 ¿Cómo se evita insertar duplicados?
+## 2.3.4 ¿Cómo se evita insertar duplicados?
 
 En la tabla imagenes, definimos:
 
+```
+
 hash TEXT NOT NULL UNIQUE
 
+```
 
 Eso significa que no se pueden repetir hashes.
 
@@ -605,13 +631,24 @@ SQLite encuentra que el hash ya existe → lanza:
 
 sqlite3.IntegrityError
 
-
 Y nuestro código captura esto:
 
 print(f"⚠ Imagen duplicada: {ruta_img}")
 
-
 y NO inserta la imagen duplicada.
+
+
+## 2.4 Verificacion base de datos 
+## 1. Con ayuda de la aplicacion sqlitebrowser visualizamos la base de datos
+<img width="1551" height="988" alt="image" src="https://github.com/user-attachments/assets/a124e262-840c-4c90-87ed-66f6b13d8636" />
+## 2. Se evidencia el contenido de las tablas 
+<img width="1918" height="1009" alt="image" src="https://github.com/user-attachments/assets/5e555f0c-a61a-44a6-927c-f710c9aa87d1" />
+## 3. La estructura de la base de datos 
+<img width="1919" height="1004" alt="image" src="https://github.com/user-attachments/assets/c4403993-094d-429d-9403-b56f9d64797c" />
+## 4. Las imagenes y como estan organizadas en la base de datos 
+<img width="1919" height="1001" alt="image" src="https://github.com/user-attachments/assets/895cf72b-10b4-45ae-b2f7-eba91cf2df20" />
+
+
 
 
 
