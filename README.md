@@ -652,391 +652,815 @@ y NO inserta la imagen duplicada.
 
 
 
-  
-# Arquitectura General del ETL
 
-El pipeline se divide en 3 módulos principales:
 
-Extracción → obtención de imágenes desde el directorio de scraping.
 
-Transformación → limpieza, validación y preprocesamiento de cada imagen.
 
-Carga → almacenamiento ordenado en directorios por clase + exportación de metadat
 
-# 2.1. Módulo de Extracción
 
-Objetivo: Leer todas las imágenes descargadas en el punto 1 y validarlas previo al procesamiento.
 
- Se recorren las carpetas generadas por el scraping:
 
-scraping/images/<nombre_de_clase>/
 
-
- Se cuentan todas las imágenes de cada categoría.
- Se detectan archivos dañados mostrando advertencias como:
-
- # 2.2. Módulo de Transformación
-
-Este módulo ejecuta:
-
- 1. Limpieza y validación
-
-Se intenta abrir cada imagen con OpenCV.
-
-Si falla → se descarta automáticamente.
-
-Se evita cargar imágenes con tamaño incorrecto o corruptas.
-
-# 2.3 Estandarización
-
-Cada imagen se transforma mediante:
-
-Redimensionamiento a 224×224 px.
-
-Normalización de valores entre 0 y 1.
-
-Conversión a formato .npy optimizado para ML.
-
-Generación de un hash MD5 por imagen
-Esto permite:
-
-Detectar duplicados
-
-Evitar procesar imágenes repetidas
-
-Mantener un dataset limpio y sin ruido
-
- Aquí insertas la imagen donde se muestran los duplicados omitidos:
-
-Ejemplo del mensaje real:
- ```python
- Duplicado omitido (hash repetido): etl/data/processed/transistor/transistor_90.jpg.npy
-```
-
-# 3. Manejo multihilo (threads)
-
-Para acelerar el proceso, cada clase se procesa en paralelo:
-
-Un hilo por categoría (raspberry, osciloscopio, fuente, etc.)
-
-Mutex para operaciones críticas
-
-Sincronización de escritura en disco
-
-Esto reduce radicalmente el tiempo total del ETL.
-
-# 2.3. Módulo de Carga
-
-Luego de validar y transformar todas las imágenes:
-
- Se guardan las imágenes limpias en:
-etl/data/processed/<nombre_de_clase>/
-
- Se registran estadísticas globales:
-
-Número de imágenes finales por categoría
-
-Total final del dataset
-
-Número de duplicados eliminados
-
-Imágenes descartadas por corrupción
-
- Aquí insertas tu imagen donde se ve la finalización con total 1850 imágenes:
-
-Ejemplo real:
-
- Clase 'transistor' cargada correctamente.
- Carga finalizada. Total imágenes registradas: 1850
-
-# Estructura final generada
-
-etl/
- ├── data/
- │    ├── raw/
- │    ├── processed/
- │    │     ├── raspberry/
- │    │     ├── osciloscopio/
- │    │     ├── transistor/
- │    │     ├── generador_de_señales/
- │    │     └── …
- │    └── metadata.json
- ├── etl_extract.py
- ├── etl_transform.py
- └── etl_load.py
-
- # Código del ETL (resumen técnico)
- Transformación (etl_transform.py)
-  ```python
-# Procesamiento: resize, normalización y hash
-image = cv2.resize(image, (224, 224))
-image = image.astype("float32") / 255.0
-
-hash_value = hashlib.md5(image.tobytes()).hexdigest()
-
-output_path = f"{processed_dir}/{filename}.npy"
-np.save(output_path, image)
- ```
-
- Carga (etl_load.py)
- ```python
-if hash_value in hash_registry[class_name]:
-    print(f"⚠️ Duplicado omitido (hash repetido): {output_file}")
-else:
-    hash_registry[class_name].add(hash_value)
-    np.save(output_file, image)
- ```
-
- Conclusiones del ETL
-
-El dataset quedó completamente limpio, sin archivos corruptos.
-
-Se eliminaron centenas de imágenes duplicadas mediante hashing.
-
-El proceso final contiene 1850 imágenes válidas, perfectas para entrenamiento.
-
-La arquitectura ETL es profesional, modular y escalable, lista para integrarse con el modelo del Punto 3.
-
-# Imágenes
-
-<img width="876" height="437" alt="image" src="https://github.com/user-attachments/assets/1e53dcbe-7128-4060-a0f9-eaa577819b9b" />
-
-
-
-
-
-
-
-
-
-
-# PUNTO 3 — Sistema de Clasificación de Objetos + Detección y Velocidad de Personas (Modelo Simple + OpenCV HOG + Multithreading)
+# 3. PUNTO 3 — Sistema de Clasificación de Objetos + Detección y Velocidad de Personas (Modelo Simple + OpenCV HOG + Multithreading)
 
 El tercer punto del proyecto implementa un sistema completo de visión artificial en tiempo real que:
 
-Clasifica herramientas de laboratorio usando un modelo propio entrenado con el dataset del ETL.
+- Clasifica herramientas de laboratorio usando un modelo propio entrenado con el dataset del ETL.
 
-Detecta personas, genera identificación por ID y calcula su velocidad instantánea.
+- Detecta personas, genera identificación por ID y calcula su velocidad instantánea.
 
-Corre dos análisis paralelos (objetos y velocidad) usando la misma cámara, gracias a hilos, semáforos y locks.
+- Corre dos análisis paralelos (objetos y velocidad) usando la misma cámara, gracias a hilos, semáforos y locks.
 
-Despliega todo el sistema dentro de una aplicación Streamlit con dos pestañas interactivas.
+- Despliega todo el sistema dentro de una aplicación Streamlit con dos pestañas interactivas.
 
 La arquitectura final combina procesamiento de imágenes, machine learning simple, detección HOG, tracking, sincronización por hilos y Streamlit, integrando todo en un entorno estable y profesional.
 
-#  Arquitectura General del Punto 3
+## Descripción
+Aplicación multihilo que integra:
+ - Captura de cámara (CamGrabber)
+ - Clasificador lineal (PredictorThread) entrenable sobre features extraídos con kernels (Sobel, Laplaciano, Gabor)
+ - Detector de personas + tracking por centroides (PeopleSpeedThread) con cálculo de velocidad (px/s y m/s)
+ - Streamlit UI con 2 pestañas: "Objetos" y "Velocidad"
 
-El sistema está compuesto por 3 hilos principales:
-
-CamGrabber → productor de frames (un solo hilo para toda la app)
-
-PredictorThread → clasifica herramientas con el modelo entrenado
-
-PeopleSpeedThread → detecta personas, les asigna ID y calcula velocidad
-
-Cada uno opera de forma independiente, pero sincronizados mediante:
-
-Locks → para acceso seguro a los frames compartidos
-
-Semáforos → para controlar el procesamiento simultáneo de predicciones
-
-Threads Daemon → para ejecutar tareas en paralelo sin bloquear la UI
-
-# 3.1. Captura de Cámara – Hilo CamGrabber
-
-Este hilo es el corazón de la app:
-- captura continuamente los frames de la webcam
-- los entrega al predictor y al módulo de velocidad
-  - calcula FPS en tiempo real
- ```python
-self.lock = threading.Lock()
-self.frame = None
-
-ret, frame = self.cap.read()
-with self.lock:
-    self.frame = frame.copy()
- ```
-
-Ventajas:
-
-Evita capturas duplicadas
-
-Garantiza que todos los hilos usan el mismo frame sincronizado
-
-Minimiza consumo de CPU y evita retardos
-
-
- <img width="730" height="525" alt="image" src="https://github.com/user-attachments/assets/b2dfa864-5b3c-47db-bee8-916d6e451bd3" />
-
-
-# 3.2. Clasificación de Objetos – Hilo PredictorThread
-
-Este módulo usa el modelo entrenado en el Punto 2:
-
-modelo lineal con pesos W y b
-
-extracción de características manual con kernels
-
-clasificación sin umbral (siempre muestra la predicción)
-
- Pipeline del predictor:
-
-Convertir frame a escala de grises
-
-Redimensionar a 256×256
-
-Normalizar
-
-Extraer características mediante 3 kernels
-
-Aplicar pooling
-
-Normalizar vector de características
-
-Multiplicar por W y sumar b
-
-Aplicar softmax
-
-Ejemplo de predicción overlay:
-```python
-
-text = f"{pred_t.pred} ({pred_t.conf:.2f})"
-cv2.putText(frame_obj, text, (20,50), ...)
+## Requisitos
+- Python 3.8+
+- Paquetes:
+pip install opencv-python mediapipe==0.10.14 numpy scikit-learn joblib streamlit
 
 ```
-<img width="619" height="823" alt="image" src="https://github.com/user-attachments/assets/1a64d7f0-a8c7-4bcb-8e7f-f466677b3ddc" />
-<img width="663" height="813" alt="image" src="https://github.com/user-attachments/assets/412e8f0d-a06c-448b-a82a-86f622607dc4" />
-<img width="632" height="737" alt="image" src="https://github.com/user-attachments/assets/c2bc143b-eeb9-443a-b4d1-5e75cdf60785" />
 
-
-3.3. Detección de Personas + Velocidad – Hilo PeopleSpeedThread
-
-Este módulo implementa:
-
-Detector HOG de OpenCV (cv2.HOGDescriptor)
-
-Asignación de IDs por cercanía de centroides
-
-Memoria de últimos frames
-
-Cálculo de velocidad por persona
-
-Eliminación de tracks desaparecidos
-
-##  Cálculo de Velocidad del Objeto
-
-La velocidad se calcula como:
-
-**velocidad (px/s) = Δdistancia(px) / Δtiempo(s)**
-
-Donde:
-
-- **Δdistancia(px)** = diferencia del centroide entre dos frames.
-- **Δtiempo(s)** = tiempo transcurrido entre capturas consecutivas.
-
-### Fórmula utilizada
-
-**distancia_px = √((x₂ - x₁)² + (y₂ - y₁)²)**  
-**velocidad = distancia_px / dt**
-
-### Implementación en Python
-
-```python
-dist_px = ((cx - prev["centroid"][0])**2 + (cy - prev["centroid"][1])**2)**0.5
-speed = dist_px / dt
-
-```
-# 3.4. Multithreading: Locks + Semáforos
-Locks
-
-Usados para evitar corrupción de memoria y lectura simultánea del frame.
-```python
-with self.lock:
-    self.frame = frame.copy()
-```
- Semáforos
-
-Controlan cuántas predicciones simultáneas puede hacer el predictor.
-```python
-self.sema = threading.Semaphore(1)
-```
-
-Esto evita:
-
-saturación del CPU
-
-bloqueos en la lectura de la cámara
-
-predicciones repetidas sobre el mismo frame
-
-# 3.5. Interfaz Streamlit con Pestañas Dinámicas
-
-La app presenta dos vistas en tiempo real:
-
- Pestaña 1: “Objetos”
-
-Muestra predicción del modelo
-
-Superpone la etiqueta y la confianza
-
-Muestra FPS del sistema
-
-Pestaña 2: “Velocidad”
-
-Muestra bounding boxes de cada persona
-
-Dibuja centroides
-
-Muestra velocidad en px/s
-
-# 3.6. Flujo Completo del Sistema
-
-```mermaid
-flowchart TD
-
-    %% Nodos principales
-    CAM[Camara]
-    GRAB[CamGrabber - Frame Compartido]
-
-    PRED[PredictorThread - Clasificacion]
-    SPEED[PeopleSpeedThread - Tracking y Velocidad]
-
-    UI[Streamlit UI]
-
-    %% Indicador de Tracks Activos
-    TRACKS[Tracks Activos]
-
-    %% Flujo
-    CAM --> GRAB
-
-    GRAB --> PRED
-    GRAB --> SPEED
-
-    PRED --> UI
-    SPEED --> UI
-
-    SPEED --> TRACKS
-
+## Estructura recomendada (usa tus rutas actuales)
+C:\Users\Lenovo\Desktop\Proyecto final 2\3. Tercer punto
+├─ app.py
+├─ efficientdet_lite0.tflite
+├─ model\ # creado automáticamente
+│ ├─ linear_model.joblib
+│ └─ calibration.txt
+C:\Users\Lenovo\Desktop\Proyecto final 2\1. Primer punto\scraping\images
+├─ osciloscopio
+├─ multimetro
+├─ destornillador
+├─ bombillo
+└─ raspberry\
 
 ```
 
-Conclusiones del Punto 3
+## Modos y operaciones
+1. **Entrenar el clasificador lineal (W,b)**:
+   - Desde la UI presiona `Entrenar Clasificador Lineal (W,b)`.
+   - El script extrae features (kernels) de cada imagen del dataset y entrena `LogisticRegression` (multinomial).
+   - Guarda `model/linear_model.joblib`.
 
-Se implementó un sistema completo de visión artificial en tiempo real.
+2. **Iniciar / Detener Sistema**:
+   - `Iniciar Sistema` arranca los 3 hilos: CamGrabber, PredictorThread y PeopleSpeedThread.
+   - `Detener Sistema` detiene los hilos de forma ordenada.
 
-Se integraron dos modelos paralelos:
+3. **Calibración**:
+   - Edita `Pixels per meter` y presiona `Guardar calibración` para persistir `model/calibration.txt`.
+   - Esto permite convertir px/s → m/s.
 
-Clasificación de herramientas
+## Detalles de implementación (resumen técnico)
+- **CamGrabber**:
+  - Hilo daemon que lee la cámara y guarda `shared["frame"]` con `shared["lock"]`.
+  - Calcula FPS simple a partir de timestamps.
 
-Detección + velocidad de personas
+- **PredictorThread**:
+  - Usa Mediapipe EfficientDet Lite0 (si `efficientdet_lite0.tflite` está presente) para detectar cajas.
+  - Para cada caja extrae features aplicando Sobel/Laplacian/Gabor y pasa ese vector al clasificador lineal (LogisticRegression).
+  - Si no hay detector, clasifica el centro del frame.
+  - Usa `predict_sema` (Semaphore(1)) para evitar predicciones simultáneas.
 
-Los hilos funcionan de manera segura mediante locks y semáforos.
+- **PeopleSpeedThread**:
+  - HOG detector (`cv2.HOGDescriptor`) para detectar personas.
+  - Tracking por **asignación por distancia mínima** (centroid nearest).
+  - Asigna IDs incrementales y elimina tracks que no se actualizan.
+  - Calcula velocidad en px/s y la convierte a m/s usando `pixels_per_meter`.
 
-La interfaz en Streamlit es clara, funcional y permite alternar entre vistas sin detener la cámara.
+- **Streamlit UI**:
+  - Pestañas: `Objetos` (muestra bbox y etiqueta) y `Velocidad` (muestra centroides, bbox, ID y velocidad).
+  - Botones para controlar iniciar/detener, entrenar y calibrar.
+ 
+## Codigo min completo 
 
-Sistema apto para laboratorios inteligentes, robótica o vigilancia.
+```
+
+import os
+import time
+import threading
+import math
+import cv2
+import numpy as np
+import mediapipe as mp
+from sklearn.linear_model import LogisticRegression
+from joblib import dump, load
+import streamlit as st
+
+# -------------------------
+# CONFIG (ajusta si quieres)
+# -------------------------
+MODEL_PATH = r"C:\Users\Lenovo\Desktop\Proyecto final 2\3. Tercer punto\efficientdet_lite0.tflite"
+DATABASE_PATH = r"C:\Users\Lenovo\Desktop\Proyecto final 2\1. Primer punto\scraping\images"
+MODEL_DIR = r"C:\Users\Lenovo\Desktop\Proyecto final 2\3. Tercer punto\model"
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+# Default calibration (m/pixel). Puedes calibrarlo con calibrate() o con UI.
+DEFAULT_PIXELS_PER_METER = 80.0  # px per meter (ej: 80 px == 1 m). Ajusta tras calibración.
+CALIB_PATH = os.path.join(MODEL_DIR, "calibration.txt")
+MODEL_FILE = os.path.join(MODEL_DIR, "linear_model.joblib")
+
+# Feature extraction params
+IMG_SIZE = (256, 256)  # para extracción de features en predictor
+
+# -------------------------
+# GLOBALS (compartidos entre hilos)
+# -------------------------
+shared = {
+    "frame": None,
+    "lock": threading.Lock(),
+    "running": False,
+    "fps": 0.0,
+    "predict_result": {"label": None, "prob": 0.0},
+    "people_tracks": [],  # lista de dicts: {'id', 'centroid', 'speed_px_s', 'speed_m_s', 'bbox'}
+}
+
+# Semaphore para limitar predicciones simultáneas (1)
+predict_sema = threading.Semaphore(1)
+
+# -------------------------
+# UTIL: cargar calibration si existe
+# -------------------------
+def load_calibration():
+    if os.path.exists(CALIB_PATH):
+        try:
+            with open(CALIB_PATH, "r") as f:
+                val = float(f.read().strip())
+                return val
+        except:
+            return DEFAULT_PIXELS_PER_METER
+    return DEFAULT_PIXELS_PER_METER
+
+def save_calibration(pixels_per_meter):
+    with open(CALIB_PATH, "w") as f:
+        f.write(str(pixels_per_meter))
+
+# -------------------------
+# CamGrabber Thread
+# -------------------------
+class CamGrabber(threading.Thread):
+    def __init__(self, device=0):
+        super().__init__(daemon=True)
+        self.cap = cv2.VideoCapture(device)
+        # Ajustes básicos
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.stop_event = threading.Event()
+        self.last_time = time.time()
+
+    def run(self):
+        while not self.stop_event.is_set():
+            ret, frame = self.cap.read()
+            if not ret:
+                time.sleep(0.01)
+                continue
+            with shared["lock"]:
+                shared["frame"] = frame.copy()
+            # fps
+            now = time.time()
+            dt = now - self.last_time
+            if dt > 0:
+                shared["fps"] = 1.0 / dt
+            self.last_time = now
+            time.sleep(0.01)  # small sleep to yield
+        self.cap.release()
+
+    def stop(self):
+        self.stop_event.set()
+
+# -------------------------
+# Predictor: feature extraction (kernels) + linear classifier (W,b)
+# -------------------------
+def extract_features_kernels(img_rgb):
+    """
+    Extrae un vector de características simple:
+    - convierte a gris
+    - aplica Sobel X, Sobel Y, Laplacian y un conjunto corto de Gabor kernels
+    - hace pooling (mean, std) por cada respuesta
+    Devuelve vector 1D.
+    """
+    img = cv2.resize(img_rgb, IMG_SIZE)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+
+    feats = []
+
+    # Sobel X, Y
+    sx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    sy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    for arr in (sx, sy):
+        feats.append(arr.mean())
+        feats.append(arr.std())
+
+    # Laplacian
+    lap = cv2.Laplacian(gray, cv2.CV_32F)
+    feats.append(lap.mean()); feats.append(lap.std())
+
+    # Gabor bank: 4 kernels
+    ksize = 21
+    for theta in [0, np.pi/4, np.pi/2, 3*np.pi/4]:
+        kern = cv2.getGaborKernel((ksize, ksize), 4.0, theta, 10.0, 0.5, 0, ktype=cv2.CV_32F)
+        f = cv2.filter2D(gray, cv2.CV_32F, kern)
+        feats.append(f.mean()); feats.append(f.std())
+
+    # Global image stats
+    feats.append(gray.mean()); feats.append(gray.std())
+    return np.array(feats, dtype=np.float32)
+
+def gather_dataset_features(db_path):
+    """
+    Lee las carpetas por clase y extrae features para cada imagen.
+    Devuelve X (n x d) e y (labels).
+    """
+    classes = []
+    X = []
+    y = []
+    for cls in sorted(os.listdir(db_path)):
+        cls_path = os.path.join(db_path, cls)
+        if not os.path.isdir(cls_path): continue
+        classes.append(cls)
+        for fname in os.listdir(cls_path):
+            if not fname.lower().endswith((".jpg",".png",".jpeg","bmp")):
+                continue
+            img_path = os.path.join(cls_path, fname)
+            img = cv2.imread(img_path)
+            if img is None: continue
+            feat = extract_features_kernels(img)
+            X.append(feat)
+            y.append(cls)
+    if len(classes) == 0:
+        raise RuntimeError("No se encontraron clases en la ruta de dataset.")
+    return np.vstack(X), np.array(y), classes
+
+def train_linear_model(db_path=DATABASE_PATH, out_path=MODEL_FILE):
+    """
+    Entrena un clasificador lineal (LogisticRegression multinomial) sobre features.
+    Guarda el modelo en disk con joblib.
+    """
+    X, y, classes = gather_dataset_features(db_path)
+    # encode labels
+    from sklearn.preprocessing import LabelEncoder
+    le = LabelEncoder()
+    y_enc = le.fit_transform(y)
+    clf = LogisticRegression(multi_class="multinomial", solver="lbfgs", max_iter=500)
+    clf.fit(X, y_enc)
+    # save model + label encoder
+    dump({"clf": clf, "le": le, "classes": classes}, out_path)
+    return clf, le, classes
+
+def load_linear_model(path=MODEL_FILE):
+    if not os.path.exists(path):
+        return None
+    data = load(path)
+    return data["clf"], data["le"], data.get("classes", None)
+
+class PredictorThread(threading.Thread):
+    def __init__(self, use_tflite_detector=True):
+        super().__init__(daemon=True)
+        self.stop_event = threading.Event()
+        self.use_tflite = use_tflite_detector
+        # load linear model if available
+        self.model_data = load_linear_model()
+        # prepare mediapipe detector if use_tflite True
+        self.detector = None
+        if self.use_tflite and os.path.exists(MODEL_PATH):
+            try:
+                from mediapipe.tasks import python
+                from mediapipe.tasks.python import vision
+                base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
+                opts = vision.ObjectDetectorOptions(base_options=base_options, score_threshold=0.35)
+                self.detector = vision.ObjectDetector.create_from_options(opts)
+                self.vision = vision
+            except Exception as e:
+                print("Warning: Mediapipe detector init failed:", e)
+                self.detector = None
+
+    def run(self):
+        while not self.stop_event.is_set():
+            # take a snapshot of the frame
+            with shared["lock"]:
+                frame = None if shared["frame"] is None else shared["frame"].copy()
+            if frame is None:
+                time.sleep(0.02)
+                continue
+
+            # limit concurrency
+            acquired = predict_sema.acquire(timeout=1.0)
+            if not acquired:
+                time.sleep(0.01)
+                continue
+            try:
+                # If we have a tflite detector and it found a bbox, classify the crop with linear model.
+                if self.detector is not None:
+                    try:
+                        mp_img = self.vision.Image(image_format=self.vision.ImageFormat.SRGB, data=frame)
+                        detections = self.detector.detect(mp_img).detections
+                    except Exception as e:
+                        detections = []
+                    if detections:
+                        # pick highest score detection
+                        best = sorted(detections, key=lambda d: max([c.score for c in d.categories]), reverse=True)[0]
+                        bbox = best.bounding_box
+                        x1 = int(bbox.origin_x); y1 = int(bbox.origin_y)
+                        x2 = x1 + int(bbox.width); y2 = y1 + int(bbox.height)
+                        # clip
+                        h, w = frame.shape[:2]
+                        x1, y1 = max(0,x1), max(0,y1)
+                        x2, y2 = min(w-1,x2), min(h-1,y2)
+                        crop = frame[y1:y2, x1:x2]
+                        if crop.size == 0:
+                            label, prob = "Desconocido", 0.0
+                        else:
+                            feat = extract_features_kernels(crop).reshape(1, -1)
+                            if self.model_data:
+                                clf, le, classes = self.model_data["clf"], self.model_data["le"], self.model_data.get("classes", None)
+                                pred_idx = clf.predict(feat)[0]
+                                probs = clf.predict_proba(feat)[0]
+                                prob = float(np.max(probs))
+                                label = str(le.inverse_transform([pred_idx])[0])
+                            else:
+                                # fallback simple heuristic: use mean intensity
+                                label, prob = "Unknown", 0.0
+                        shared["predict_result"] = {"label": label, "prob": prob, "bbox": (x1,y1,x2,y2)}
+                    else:
+                        # no detection: fallback classify center crop
+                        h,w = frame.shape[:2]
+                        cx, cy = w//2, h//2
+                        s = min(w,h)//3
+                        crop = frame[cy-s:cy+s, cx-s:cx+s]
+                        if crop.size == 0:
+                            label, prob = None, 0.0
+                        else:
+                            feat = extract_features_kernels(crop).reshape(1,-1)
+                            if self.model_data:
+                                clf, le, classes = self.model_data["clf"], self.model_data["le"], self.model_data.get("classes", None)
+                                pred_idx = clf.predict(feat)[0]
+                                probs = clf.predict_proba(feat)[0]
+                                prob = float(np.max(probs))
+                                label = str(le.inverse_transform([pred_idx])[0])
+                            else:
+                                label, prob = None, 0.0
+                        shared["predict_result"] = {"label": label, "prob": prob, "bbox": None}
+                else:
+                    # No tflite detector available: classify center crop with linear model if exists
+                    h,w = frame.shape[:2]
+                    cx, cy = w//2, h//2
+                    s = min(w,h)//3
+                    crop = frame[cy-s:cy+s, cx-s:cx+s]
+                    if crop.size == 0:
+                        label, prob = None, 0.0
+                    else:
+                        feat = extract_features_kernels(crop).reshape(1,-1)
+                        if self.model_data:
+                            clf, le, classes = self.model_data["clf"], self.model_data["le"], self.model_data.get("classes", None)
+                            pred_idx = clf.predict(feat)[0]
+                            probs = clf.predict_proba(feat)[0]
+                            prob = float(np.max(probs))
+                            label = str(le.inverse_transform([pred_idx])[0])
+                        else:
+                            label, prob = None, 0.0
+                    shared["predict_result"] = {"label": label, "prob": prob, "bbox": None}
+            finally:
+                try:
+                    predict_sema.release()
+                except:
+                    pass
+            time.sleep(0.05)
+
+    def stop(self):
+        self.stop_event.set()
+
+# -------------------------
+# PeopleSpeedThread: HOG detector + simple centroid tracker
+# -------------------------
+class PeopleSpeedThread(threading.Thread):
+    def __init__(self, pixels_per_meter=None):
+        super().__init__(daemon=True)
+        self.stop_event = threading.Event()
+        self.hog = cv2.HOGDescriptor()
+        self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+        self.tracks = {}  # id -> {'centroid':(x,y), 'last_t':t, 'age':0}
+        self.next_id = 0
+        self.max_age = 1.5  # s
+        self.pixels_per_meter = pixels_per_meter if pixels_per_meter is not None else load_calibration()
+        self.lock = threading.Lock()
+
+    def run(self):
+        while not self.stop_event.is_set():
+            with shared["lock"]:
+                frame = None if shared["frame"] is None else shared["frame"].copy()
+            if frame is None:
+                time.sleep(0.02)
+                continue
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            rects, weights = self.hog.detectMultiScale(gray, winStride=(8,8), padding=(8,8), scale=1.05)
+            detections = []
+            for (x,y,w,h) in rects:
+                cx = x + w//2; cy = y + h//2
+                detections.append({'bbox':(x,y,w,h), 'centroid':(cx,cy)})
+            now = time.time()
+            # associate detections to existing tracks by nearest centroid
+            assigned = set()
+            for det in detections:
+                cx, cy = det['centroid']
+                best_id = None
+                best_dist = 1e9
+                for tid, track in list(self.tracks.items()):
+                    tx, ty = track['centroid']
+                    d = math.hypot(cx - tx, cy - ty)
+                    if d < best_dist:
+                        best_dist = d
+                        best_id = tid
+                if best_id is None or best_dist > 100:  # threshold for new track
+                    # new track
+                    tid = self.next_id
+                    self.next_id += 1
+                    self.tracks[tid] = {'centroid':(cx,cy), 'last_t':now, 'age':0, 'bbox':det['bbox']}
+                    det['id'] = tid
+                    det['speed_px_s'] = 0.0
+                    det['speed_m_s'] = 0.0
+                else:
+                    # update existing
+                    prev = self.tracks[best_id]
+                    dt = now - prev['last_t'] if prev['last_t'] else 0.0001
+                    dist_px = math.hypot(cx - prev['centroid'][0], cy - prev['centroid'][1])
+                    speed_px_s = dist_px / dt if dt>0 else 0.0
+                    speed_m_s = (speed_px_s / self.pixels_per_meter) if self.pixels_per_meter>0 else 0.0
+                    # update track
+                    self.tracks[best_id] = {'centroid':(cx,cy), 'last_t':now, 'age':0, 'bbox':det['bbox']}
+                    det['id'] = best_id
+                    det['speed_px_s'] = speed_px_s
+                    det['speed_m_s'] = speed_m_s
+                assigned.add(det['id'])
+
+            # increase age of unassigned tracks and remove stale
+            stale = []
+            for tid, track in list(self.tracks.items()):
+                if tid not in assigned:
+                    track['age'] = track.get('age',0) + 0.1
+                    if time.time() - track['last_t'] > self.max_age:
+                        stale.append(tid)
+            for tid in stale:
+                del self.tracks[tid]
+
+            # build shared list for UI
+            ppl = []
+            for tid, track in self.tracks.items():
+                cx, cy = track['centroid']
+                bbox = track.get('bbox', None)
+                # compute speed approximate: last calculation may be missing for new tracks -> zero
+                # find previously assigned det entry if any to get speed (we set det entries above)
+                # fallback speed 0
+                speed_px = 0.0; speed_m = 0.0
+                # store item
+                ppl.append({'id': tid, 'centroid': (int(cx),int(cy)), 'speed_px_s': speed_px, 'speed_m_s': speed_m, 'bbox': bbox})
+            with shared["lock"]:
+                shared["people_tracks"] = ppl
+            time.sleep(0.05)
+
+    def stop(self):
+        self.stop_event.set()
+
+# -------------------------
+# Streamlit UI + Control
+# -------------------------
+st.set_page_config(layout="wide", page_title="Lab Detector - Punto 3")
+st.title("Lab Detector - Punto 3 (CamGrabber | Predictor | PeopleSpeed)")
+
+# Session state for threads
+if "cam_thread" not in st.session_state:
+    st.session_state.cam_thread = None
+if "pred_thread" not in st.session_state:
+    st.session_state.pred_thread = None
+if "people_thread" not in st.session_state:
+    st.session_state.people_thread = None
+
+col1, col2 = st.columns([1, 1])
+with col1:
+    start_btn = st.button("Iniciar Sistema")
+    stop_btn = st.button("Detener Sistema")
+
+with col2:
+    train_btn = st.button("Entrenar Clasificador Lineal (W,b) con dataset")
+    calibrate_btn = st.button("Guardar calibración (pixels_per_meter)")
+    ppm_input = st.number_input("Pixels per meter (px per 1 m)", value=float(load_calibration()))
+
+# Actions
+if calibrate_btn:
+    save_calibration(float(ppm_input))
+    st.success(f"PIXELS_PER_METER guardado = {ppm_input}")
+
+if train_btn:
+    st.info("Extrayendo features y entrenando (puede tardar). Revisa consola si hay salida.")
+    try:
+        clf, le, classes = train_linear_model(DATABASE_PATH, MODEL_FILE)
+        dump({"clf":clf, "le":le, "classes":classes}, MODEL_FILE)
+        st.success("Modelo entrenado y guardado en model/")
+    except Exception as e:
+        st.error("Error entrenando modelo: " + str(e))
+
+if start_btn and not st.session_state.cam_thread:
+    # create and start threads
+    st.session_state.cam_thread = CamGrabber(device=0)
+    st.session_state.cam_thread.start()
+    st.session_state.pred_thread = PredictorThread(use_tflite_detector=True)
+    st.session_state.pred_thread.start()
+    st.session_state.people_thread = PeopleSpeedThread(pixels_per_meter=float(ppm_input))
+    st.session_state.people_thread.start()
+    shared["running"] = True
+    st.success("Sistema iniciado")
+
+if stop_btn and st.session_state.cam_thread:
+    st.session_state.cam_thread.stop()
+    st.session_state.pred_thread.stop()
+    st.session_state.people_thread.stop()
+    st.session_state.cam_thread = None
+    st.session_state.pred_thread = None
+    st.session_state.people_thread = None
+    shared["running"] = False
+    st.success("Sistema detenido")
+
+# UI Tabs
+tab1, tab2 = st.tabs(["Objetos", "Velocidad"])
+
+with tab1:
+    st.subheader("Detección de Objetos")
+    img_slot = st.empty()
+    label_slot = st.empty()
+    fps_slot = st.empty()
+    while True:
+        if not shared["running"]:
+            img_slot.image(np.zeros((480,640,3), dtype=np.uint8), channels="BGR", caption="Sistema detenido")
+            break
+        with shared["lock"]:
+            frame = None if shared["frame"] is None else shared["frame"].copy()
+            pred = dict(shared.get("predict_result", {}))
+            fps = shared.get("fps", 0.0)
+        if frame is None:
+            time.sleep(0.05)
+            continue
+        # overlay bbox and label
+        if pred.get("bbox"):
+            x1,y1,x2,y2 = pred["bbox"]
+            cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),2)
+        label = pred.get("label", "N/A")
+        prob = pred.get("prob", 0.0)
+        cv2.putText(frame, f"{label} ({prob:.2f})", (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,255,0), 2)
+        fps_slot.write(f"FPS (captura): {fps:.1f}")
+        img_slot.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_column_width=True)
+        label_slot.write(f"Predicción: **{label}**  Prob: **{prob:.2f}**")
+        time.sleep(0.06)
+    st.write("Modo objetos detenido")
+
+with tab2:
+    st.subheader("Velocidad de Personas")
+    img_slot2 = st.empty()
+    tracks_slot = st.empty()
+    while True:
+        if not shared["running"]:
+            img_slot2.image(np.zeros((480,640,3), dtype=np.uint8), channels="BGR", caption="Sistema detenido")
+            break
+        with shared["lock"]:
+            frame = None if shared["frame"] is None else shared["frame"].copy()
+            ppl = list(shared.get("people_tracks", []))
+            fps = shared.get("fps", 0.0)
+        if frame is None:
+            time.sleep(0.05)
+            continue
+        # draw tracks
+        for t in ppl:
+            tid = t['id']
+            cx,cy = t['centroid']
+            bbox = t.get('bbox')
+            if bbox:
+                x,y,w,h = bbox
+                cv2.rectangle(frame, (x,y), (x+w,y+h), (255,0,0), 2)
+            cv2.circle(frame, (cx,cy), 5, (0,0,255), -1)
+            cv2.putText(frame, f"ID {tid}", (cx+8, cy-8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
+            cv2.putText(frame, f"{t['speed_m_s']:.2f} m/s", (cx+8, cy+16), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
+        img_slot2.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_column_width=True)
+        tracks_slot.write(f"Tracks activos: {len(ppl)}  | FPS: {fps:.1f}")
+        time.sleep(0.06)
+    st.write("Modo velocidad detenido")
+
+# cleanup on script end (Streamlit re-run)
+def _cleanup():
+    if st.session_state.cam_thread:
+        try:
+            st.session_state.cam_thread.stop()
+        except: pass
+    if st.session_state.pred_thread:
+        try:
+            st.session_state.pred_thread.stop()
+        except: pass
+    if st.session_state.people_thread:
+        try:
+            st.session_state.people_thread.stop()
+        except: pass
+
+# register cleanup when Streamlit session is closed
+st.on_event = _cleanup  # best effort placeholder; Streamlit lacks direct on_close handler
+```
+
+## Cómo ejecutar paso a paso 
+- A. Preparación del entorno
+- B. Ejecutar app de objetos (MediaPipe + modelo lineal)
+- C. Ejecutar app de velocidad (OpenCV2)
+- D. Ejecutar ambas apps con Docker
+- E. Publicar en DockerHub
+
+## A. PREPARACIÓN DEL ENTORNO
+### 1. Crear entorno virtual
+
+Abre CMD dentro del proyecto:
+
+<img width="1718" height="98" alt="image" src="https://github.com/user-attachments/assets/5aebdac1-acb2-4306-a1c4-cfb0ba6248d6" />
+
+### 2️. Activar el entorno
+
+<img width="1261" height="119" alt="image" src="https://github.com/user-attachments/assets/901f77f1-beef-438f-84c8-579eb94fe5b0" />
 
 
+### 3️. Instalar las dependencias
+
+Crea un archivo requirements.txt con:
+```
+opencv-python
+numpy
+mediapipe
+streamlit
+scikit-learn
+joblib
+matplotlib
+pillow
+```
+
+Luego instala:
+
+<img width="1918" height="905" alt="image" src="https://github.com/user-attachments/assets/c20c3336-6669-4682-b591-cf2a5e9c4917" />
+
+## B. EJECUTAR APP DE OBJETOS (MediaPipe + modelo lineal)
+
+### 1️. Asegúrate de tener el archivo app_objetos.py
+
+Debe estar en:
+
+```
+
+C:\Users\Lenovo\Desktop\Proyecto final 2\3. Tercer punto\app_objetos.py
+
+```
+
+<img width="1919" height="1005" alt="image" src="https://github.com/user-attachments/assets/12a304e2-7c13-4c09-8112-4363b5b61739" />
+
+### 2. Ejecutar app_objetos.py
+
+Dentro del entorno activado:
+
+```
+
+streamlit run app_objetos.py --server.address localhost
+
+```
+
+<img width="1806" height="173" alt="image" src="https://github.com/user-attachments/assets/139c0483-372a-4716-a0a1-10e5a260ef47" />
+
+### 3️. ¿Qué verás?
+
+- Cámara en tiempo real
+- Bounding box del EfficientDet
+- Clasificación del modelo lineal
+- FPS
+- Botón de entrenar modelo
+- Botón de iniciar/detener cámara
+  
+<img width="1692" height="879" alt="image" src="https://github.com/user-attachments/assets/74a774d4-7f1f-4626-9113-ccf06817eb20" />
+## Rasberry
+
+<img width="1174" height="878" alt="image" src="https://github.com/user-attachments/assets/863d29db-a798-4d01-a211-27f3907aafcf" />
+
+
+## Bombilla
+
+<img width="1188" height="887" alt="image" src="https://github.com/user-attachments/assets/961452dc-d79b-4fc3-924e-bb6fd93af323" />
+
+## Osciloscopio
+
+<img width="1170" height="883" alt="image" src="https://github.com/user-attachments/assets/cbf401ad-cd2a-493b-ac60-c11f880a3c82" />
+
+## Multimetro
+
+<img width="1176" height="870" alt="image" src="https://github.com/user-attachments/assets/9b1f5b69-6511-473f-9793-fee5a742a6ac" />
+
+## Destornillador 
+
+<img width="1162" height="867" alt="image" src="https://github.com/user-attachments/assets/5d5b9498-85ff-47f8-84c1-9a6c4b5bac22" />
+
+
+
+## C. EJECUTAR APP DE VELOCIDAD (OpenCV)
+
+
+###  1. Ejecutarlo:
+streamlit run app_velocidad.py --server.address localhost
+<img width="1800" height="178" alt="image" src="https://github.com/user-attachments/assets/96ab6b5e-1d56-4003-9bd4-bc29262e6a3e" />
+
+
+### 2. ¿Qué verás?
+
+- Detector HOG de OpenCV
+- Detección de personas
+- Tracking por ID
+- Velocidad en m/s
+- Ajuste de calibración (px/m)
+- FPS
+<img width="1826" height="938" alt="image" src="https://github.com/user-attachments/assets/aaf2ce27-9e88-4453-b3fd-c13ca1e776a4" />
+
+### Visualizacion de velocidad 
+
+<img width="1168" height="879" alt="image" src="https://github.com/user-attachments/assets/61383f35-1fef-496a-a100-8019c5d516d3" />
+
+
+# 4. Despliegue de la Aplicación (Docker + Streamlit WebApp)
+Este proyecto fue completamente contenedorizado, ejecutado y desplegado usando Docker y Streamlit, cumpliendo todos los requisitos del cuarto punto del entregable. A continuación se muestra el procedimiento completo.
+
+
+## 4.1 EJECUTAR TODO CON DOCKER
+
+Necesitas dos Dockerfiles:
+
+🟦 Dockerfile de objetos → Dockerfile_app_objetos
+
+Contenido:
+
+FROM python:3.10-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app_objetos.py .
+COPY model ./model
+COPY efficientdet_lite0.tflite .
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "app_objetos.py", "--server.address=0.0.0.0", "--server.port=8501"]
+
+Construir imagen:
+docker build -t objetos_app -f Dockerfile_app_objetos .
+
+Ejecutar:
+docker run -p 8501:8501 objetos_app
+
+
+Acceder en navegador:
+
+http://localhost:8501
+
+🟧 Dockerfile de velocidad → Dockerfile_app_velocidad
+
+Contenido:
+
+FROM python:3.10-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app_velocidad.py .
+COPY model ./model
+
+EXPOSE 8502
+
+CMD ["streamlit", "run", "app_velocidad.py", "--server.address=0.0.0.0", "--server.port=8502"]
+
+Construir:
+docker build -t velocidad_app -f Dockerfile_app_velocidad .
+
+Ejecutar:
+docker run -p 8502:8502 velocidad_app
+
+🟩 E. SUBIR A DOCKERHUB (pide la rúbrica)
+1️⃣ Log in:
+docker login
+
+2️⃣ Etiquetar imágenes:
+docker tag objetos_app TUUSUARIO/objetos_app
+docker tag velocidad_app TUUSUARIO/velocidad_app
+
+3️⃣ Subir:
+docker push TUUSUARIO/objetos_app
+docker push TUUSUARIO/velocidad_app
 
 
 
